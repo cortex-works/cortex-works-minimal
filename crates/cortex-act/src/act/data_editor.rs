@@ -73,14 +73,15 @@ fn apply_single_edit(
         Err(find_err) if edit.action == "set" => {
             // Graceful upsert: target leaf did not exist, try to insert it
             // into the parent object rather than returning an error.
-            upsert_into_parent(source, lang, ext, &edit.target, edit.value.as_deref())
-                .with_context(|| {
-                    format!(
-                        "Path '{}' not found and upsert fallback also failed. \
-                         Original find error: {}",
-                        edit.target, find_err
-                    )
-                })
+            match upsert_into_parent(source, lang, ext, &edit.target, edit.value.as_deref()) {
+                Ok(s) => Ok(s),
+                Err(upsert_err) => Err(anyhow::anyhow!(
+                    "Path '{}' not found and upsert fallback also failed.\n\
+                     Find error   : {}\n\
+                     Upsert error : {}",
+                    edit.target, find_err, upsert_err
+                )),
+            }
         }
         Err(e) => Err(e),
     }

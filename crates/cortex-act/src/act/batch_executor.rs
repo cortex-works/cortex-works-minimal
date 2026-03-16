@@ -8,8 +8,8 @@
 //!
 //! * Operations run **sequentially** (not in parallel) to preserve the
 //!   semantic ordering agents rely on (edit A before validate with B).
-//! * A **failing** operation writes an `"error"` entry and continues —
-//!   the rest of the batch is never abandoned.
+//! * A **failing** operation writes an `"error"` entry and continues by
+//!   default, or aborts the remainder when `fail_fast=true`.
 //! * Nested `cortex_act_batch_execute` calls are rejected to prevent
 //!   unbounded recursion.
 //! * Each operation result includes `index`, `tool_name`, `success`,
@@ -18,6 +18,20 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::PathBuf;
+
+const MAX_OUTPUT_CHARS: usize = 4_000;
+const OUTPUT_TRUNCATION_SUFFIX: &str = "... [Output truncated to save tokens. Run this tool individually if you need the full output]";
+
+fn truncate_output(output: String) -> String {
+    if output.chars().count() <= MAX_OUTPUT_CHARS {
+        return output;
+    }
+
+    let keep = MAX_OUTPUT_CHARS.saturating_sub(OUTPUT_TRUNCATION_SUFFIX.chars().count());
+    let mut truncated: String = output.chars().take(keep).collect();
+    truncated.push_str(OUTPUT_TRUNCATION_SUFFIX);
+    truncated
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Public types
@@ -51,6 +65,8 @@ pub struct BatchSummary {
     pub total: usize,
     pub passed: usize,
     pub failed: usize,
+    /// Operations not executed because `fail_fast=true` stopped the run early.
+    pub skipped: usize,
     pub results: Vec<OpResult>,
 }
 
@@ -59,7 +75,12 @@ pub struct BatchSummary {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Execute all operations sequentially. Never panics; always returns a summary.
-pub fn execute_batch(operations: Vec<BatchOp>, workspace_roots: &[PathBuf]) -> BatchSummary {
+pub fn execute_batch(
+    operations: Vec<BatchOp>,
+    workspace_roots: &[PathBuf],
+    workspace_names: &[String],
+    fail_fast: bool,
+) -> BatchSummary {
     let total = operations.len();
     let mut results = Vec::with_capacity(total);
 
@@ -79,9 +100,10 @@ pub fn execute_batch(operations: Vec<BatchOp>, workspace_roots: &[PathBuf]) -> B
             &op.tool_name,
             &op.parameters,
             workspace_roots,
+            workspace_names,
         );
         let success = outcome.is_ok();
-        let output = outcome.unwrap_or_else(|e| e);
+        let output = truncate_output(outcome.unwrap_or_else(|e| e));
 
         results.push(OpResult {
             index,
@@ -89,15 +111,21 @@ pub fn execute_batch(operations: Vec<BatchOp>, workspace_roots: &[PathBuf]) -> B
             success,
             output,
         });
+
+        if fail_fast && !success {
+            break;
+        }
     }
 
     let passed = results.iter().filter(|r| r.success).count();
-    let failed = total - passed;
+    let failed = results.iter().filter(|r| !r.success).count();
+    let skipped = total - results.len();
 
     BatchSummary {
         total,
         passed,
         failed,
+        skipped,
         results,
     }
 }

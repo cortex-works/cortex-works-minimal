@@ -72,7 +72,9 @@ pub fn run(args: &Value, workspace_roots: &[PathBuf]) -> Result<String, String> 
     // ── Embed query ───────────────────────────────────────────────────────
     // Returns None when the model is unavailable; zero-vector degrades
     // gracefully to recency-ranked results.
-    let query_vec = embed_query(&query).unwrap_or_else(|| vec![0.0_f32; 512]);
+    let raw_vec = embed_query(&query);
+    let model_available = raw_vec.is_some();
+    let query_vec = raw_vec.unwrap_or_else(|| vec![0.0_f32; 512]);
 
     // ── Open DB ───────────────────────────────────────────────────────────
     let db = LanceDb::open_default_sync()
@@ -162,15 +164,22 @@ pub fn run(args: &Value, workspace_roots: &[PathBuf]) -> Result<String, String> 
         })
         .unwrap_or_default();
 
+    let model_warn = if !model_available {
+        "\n> ⚠️  **Embedding model unavailable** — scores reflect keyword/recency ranking, NOT semantic similarity. Results may be off-topic.\n"
+    } else {
+        ""
+    };
+
     let mut out = format!(
         "## Semantic Code Search — `{query}`\n\
-         _{n} result(s){scope}_{rebuild_note}\n",
+         _{n} result(s){scope}_{rebuild_note}\n{model_warn}",
         n = results.len(),
         scope = project_filter
             .as_deref()
             .map(|p| format!(" · scoped to `{p}`"))
             .unwrap_or_default(),
         rebuild_note = rebuild_note,
+        model_warn = model_warn,
     );
 
     // Cache opened files to avoid re-reading the same file for each symbol.

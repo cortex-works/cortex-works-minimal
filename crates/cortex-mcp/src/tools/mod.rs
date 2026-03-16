@@ -18,6 +18,9 @@ use serde_json::{Value, json};
 #[allow(dead_code)]
 pub fn mark_rules_read() {}
 
+const BATCH_MAX_OUTPUT_CHARS: usize = 4_000;
+const BATCH_OUTPUT_TRUNCATION_SUFFIX: &str = "... [Output truncated to save tokens. Run this tool individually if you need the full output]";
+
 // ─── Global registry ─────────────────────────────────────────────────────────
 
 static TOOL_REGISTRY: OnceLock<(HashMap<String, CortexTool>, Vec<String>)> = OnceLock::new();
@@ -41,28 +44,58 @@ fn build_registry() -> (HashMap<String, CortexTool>, Vec<String>) {
 // ─── Inner helpers ────────────────────────────────────────────────────────────
 
 /// Call an AST tool via `ServerState::tool_call` and unwrap the content text.
+fn rpc_text(resp: &Value) -> String {
+    resp.get("result")
+        .and_then(|result| result.get("content"))
+        .and_then(|content| content.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.get("text").and_then(|text| text.as_str()))
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .filter(|text| !text.is_empty())
+        .or_else(|| {
+            resp.get("error")
+                .and_then(|error| error.get("message"))
+                .and_then(|message| message.as_str())
+                .map(ToOwned::to_owned)
+        })
+        .unwrap_or_else(|| serde_json::to_string(resp).unwrap_or_default())
+}
+
+fn truncate_batch_output(output: String) -> String {
+    if output.chars().count() <= BATCH_MAX_OUTPUT_CHARS {
+        return output;
+    }
+
+    let keep = BATCH_MAX_OUTPUT_CHARS
+        .saturating_sub(BATCH_OUTPUT_TRUNCATION_SUFFIX.chars().count());
+    let mut truncated: String = output.chars().take(keep).collect();
+    truncated.push_str(BATCH_OUTPUT_TRUNCATION_SUFFIX);
+    truncated
+}
+
 fn ast_execute(ast_state: &mut ServerState, name: &str, args: &Value) -> Result<String, String> {
     let params = json!({ "name": name, "arguments": args });
     let resp = ast_state.tool_call(Value::Null, &params);
+
+    tracing::debug!(tool = name, response = ?resp, "ast tool response");
 
     if let Some(msg) = resp
         .get("error")
         .and_then(|e| e.get("message"))
         .and_then(|m| m.as_str())
     {
+        tracing::error!(tool = name, message = %msg, response = ?resp, "ast tool rpc error");
         return Err(msg.to_string());
     }
 
-    let text = resp["result"]["content"]
-        .as_array()
-        .and_then(|arr| arr.first())
-        .and_then(|c| c["text"].as_str())
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| {
-            serde_json::to_string(&resp["result"]).unwrap_or_default()
-        });
+    let text = rpc_text(&resp);
 
     if resp["result"]["isError"].as_bool().unwrap_or(false) {
+        tracing::error!(tool = name, output = %text, response = ?resp, "ast tool returned error result");
         Err(text)
     } else {
         Ok(text)
@@ -137,7 +170,12 @@ pub fn execute_tool(
 
     if let Some(tool) = registry.get(name) {
         return match &tool.handler {
-            ToolHandler::Sync(f) => f(name, args, ast_state.workspace_roots()),
+            ToolHandler::Sync(f) => f(
+                name,
+                args,
+                ast_state.workspace_roots(),
+                ast_state.workspace_root_names(),
+            ),
             ToolHandler::Ast    => ast_execute(ast_state, name, args),
         };
     }
@@ -163,6 +201,8 @@ pub fn dispatch(ast_state: &mut ServerState, id: Value, params: &Value) -> Value
 
     // ── cortex_act_batch_execute ──────────────────────────────────────────
     if name == "cortex_act_batch_execute" {
+        use cortex_act::act::batch_executor::{BatchOp, BatchSummary, OpResult};
+
         let id2 = id.clone();
         let ok = move |t: String| {
             json!({ "jsonrpc":"2.0","id":id,  "result":{"content":[{"type":"text","text":t}],"isError":false} })
@@ -174,16 +214,65 @@ pub fn dispatch(ast_state: &mut ServerState, id: Value, params: &Value) -> Value
             Some(a) => a.clone(),
             None => return err("'operations' array required".into()),
         };
-        let mut results: Vec<Value> = Vec::with_capacity(ops.len());
+        let fail_fast = args
+            .get("fail_fast")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let mut operations: Vec<BatchOp> = Vec::with_capacity(ops.len());
         for op in &ops {
             let tname = op.get("tool_name").and_then(|v| v.as_str()).unwrap_or("");
-            let targs = op.get("parameters").cloned().unwrap_or_else(|| json!({}));
-            let r = execute_tool(ast_state, tname, &targs);
-            results.push(
-                json!({ "tool": tname, "ok": r.is_ok(), "output": r.unwrap_or_else(|e| e) }),
-            );
+            if tname.is_empty() {
+                return err("Each operation must have a 'tool_name'".into());
+            }
+            operations.push(BatchOp {
+                tool_name: tname.to_string(),
+                parameters: op.get("parameters").cloned().unwrap_or_else(|| json!({})),
+            });
         }
-        return ok(serde_json::to_string(&results).unwrap_or_default());
+        let total = operations.len();
+        let mut results = Vec::with_capacity(total);
+
+        for (index, op) in operations.into_iter().enumerate() {
+            if op.tool_name == "cortex_act_batch_execute" {
+                results.push(OpResult {
+                    index,
+                    tool_name: op.tool_name,
+                    success: false,
+                    output: "Nested cortex_act_batch_execute is not allowed".to_string(),
+                });
+                if fail_fast {
+                    break;
+                }
+                continue;
+            }
+
+            let outcome = execute_tool(ast_state, &op.tool_name, &op.parameters);
+            let success = outcome.is_ok();
+            let output = truncate_batch_output(outcome.unwrap_or_else(|e| e));
+
+            results.push(OpResult {
+                index,
+                tool_name: op.tool_name,
+                success,
+                output,
+            });
+
+            if fail_fast && !success {
+                break;
+            }
+        }
+
+        let passed = results.iter().filter(|result| result.success).count();
+        let failed = results.iter().filter(|result| !result.success).count();
+        let skipped = total - results.len();
+        let summary = BatchSummary {
+            total,
+            passed,
+            failed,
+            skipped,
+            results,
+        };
+        return ok(serde_json::to_string(&summary).unwrap_or_default());
     }
 
     // ── All other tools ───────────────────────────────────────────────────

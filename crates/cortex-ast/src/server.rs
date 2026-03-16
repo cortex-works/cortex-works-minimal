@@ -28,6 +28,14 @@ pub struct ServerState {
     /// Multi-root workspaces (VS Code `.code-workspace`, Zed multi-project, JetBrains
     /// polyrepo) populate multiple entries; single-root editors produce exactly one entry.
     workspace_roots: Vec<PathBuf>,
+    workspace_root_names: Vec<String>,
+}
+
+fn default_workspace_alias(root: &std::path::Path) -> String {
+    root.file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("root")
+        .to_string()
 }
 
 /// Returns `true` for "useless" roots that indicate the server started with the
@@ -105,6 +113,10 @@ impl ServerState {
         &self.workspace_roots
     }
 
+    pub fn workspace_root_names(&self) -> &[String] {
+        &self.workspace_root_names
+    }
+
     /// Parses the MCP `initialize` request parameters and stores all workspace roots.
     ///
     /// Priority: `workspaceFolders` (all entries) → `rootUri` → `rootPath`.
@@ -113,21 +125,28 @@ impl ServerState {
     /// path relativisation, and cache-dir hashing all see the complete set.
     pub fn capture_init_root(&mut self, params: &serde_json::Value) {
         // Collect every workspaceFolders entry (multi-root path).
-        let mut roots: Vec<PathBuf> = params
-            .get("workspaceFolders")
-            .and_then(|f| f.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|folder| {
-                        folder
-                            .get("uri")
-                            .or_else(|| folder.get("path"))
-                            .and_then(|v| v.as_str())
-                            .and_then(extract_path_from_uri)
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
+        let mut roots: Vec<PathBuf> = Vec::new();
+        let mut names: Vec<String> = Vec::new();
+
+        if let Some(arr) = params.get("workspaceFolders").and_then(|f| f.as_array()) {
+            for folder in arr {
+                let raw_path = folder
+                    .get("uri")
+                    .or_else(|| folder.get("path"))
+                    .and_then(|v| v.as_str());
+                if let Some(path) = raw_path.and_then(extract_path_from_uri) {
+                    let name = folder
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .map(str::to_string)
+                        .unwrap_or_else(|| default_workspace_alias(&path));
+                    roots.push(path);
+                    names.push(name);
+                }
+            }
+        }
 
         // Fallback to rootUri / rootPath when workspaceFolders is absent or empty.
         if roots.is_empty() {
@@ -136,6 +155,7 @@ impl ServerState {
                 .or_else(|| params.get("rootPath"))
                 .and_then(|v| v.as_str());
             if let Some(r) = raw_uri.and_then(extract_path_from_uri) {
+                names.push(default_workspace_alias(&r));
                 roots.push(r);
             }
         }
@@ -144,6 +164,7 @@ impl ServerState {
         // value (env vars / --root) so the editor's own answer always wins.
         if !roots.is_empty() {
             self.workspace_roots = roots;
+            self.workspace_root_names = names;
         }
     }
 
@@ -421,8 +442,7 @@ impl ServerState {
                             "properties": {
                                 "action": {
                                     "type": "string",
-                                    "description": "status: list active and downloadable languages. add: download and hot-reload parser(s).",
-                                    "enum": ["status", "add"]
+                                    "description": "Must be 'status' or 'add'. status: list active and downloadable languages. add: download and hot-reload parser(s)."
                                 },
                                 "languages": {
                                     "type": "array",

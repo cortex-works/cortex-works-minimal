@@ -10,8 +10,13 @@ use serde_json::{Value, json};
 use super::registry::{CortexTool, ToolHandler};
 
 /// Synchronous handler shared by all cortex-act tools.
-fn act_handler(name: &str, args: &Value, workspace_roots: &[PathBuf]) -> Result<String, String> {
-    cortex_act::act::dispatch::execute_single(name, args, workspace_roots)
+fn act_handler(
+    name: &str,
+    args: &Value,
+    workspace_roots: &[PathBuf],
+    workspace_names: &[String],
+) -> Result<String, String> {
+    cortex_act::act::dispatch::execute_single(name, args, workspace_roots, workspace_names)
 }
 
 /// Return all cortex-act tool registry entries (schema + handler + gate flags).
@@ -167,10 +172,15 @@ fn act_schemas() -> Vec<Value> {
         // ── Batch Execute (Meta-Tool) ─────────────────────────────────────
         json!({
             "name": "cortex_act_batch_execute",
-            "description": "Execute multiple Cortex tool calls in one round-trip. Best for independent reads or a small edit+verify sequence. Each operation reports success or failure independently.",
+            "description": "Execute multiple Cortex tool calls in one round-trip. Best for independent reads or a small edit+verify sequence. Runs sequentially, supports optional fail-fast behavior, and truncates oversized per-operation output. Example operations: [{\"tool_name\": \"cortex_act_shell_exec\", \"parameters\": {\"command\": \"cargo check\", \"cwd\": \"[ProjectA]\"}}]",
             "inputSchema": {
                 "type": "object",
                 "properties": {
+                    "fail_fast": {
+                        "type": "boolean",
+                        "description": "When true, stop after the first failing operation. Default false.",
+                        "default": false
+                    },
                     "operations": {
                         "type": "array",
                         "description": "Ordered list of operations to execute.",

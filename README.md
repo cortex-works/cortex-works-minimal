@@ -57,9 +57,8 @@ The repository may still contain legacy or auxiliary folders, but the supported 
 ## Quick Start
 
 ```bash
-git clone https://github.com/DevsHero/cortex-works
-cd cortex-works
-git checkout minimal
+git clone https://github.com/cortex-works/cortex-works-minimal
+cd cortex-works-minimal
 
 cargo build --release -p cortex-mcp
 ./target/release/cortex-mcp

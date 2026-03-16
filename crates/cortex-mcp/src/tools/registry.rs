@@ -37,6 +37,7 @@ pub type SyncFn = fn(
     name: &str,
     args: &Value,
     workspace_roots: &[PathBuf],
+    workspace_names: &[String],
 ) -> Result<String, String>;
 
 /// How a tool's `tools/call` request is dispatched at runtime.

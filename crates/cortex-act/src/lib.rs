@@ -1,7 +1,7 @@
 //! # cortex-act — library surface
 //!
 //! Exposes the full `act` module tree so `cortex-mcp` (and tests) can call
-//! `cortex_act::act::dispatch::execute_single(name, args, workspace_roots)` directly without
+//! `cortex_act::act::dispatch::execute_single(name, args, workspace_roots, workspace_names)` directly without
 //! going through the stdio MCP loop.
 //!
 pub mod act;

@@ -1,6 +1,6 @@
 //! # Central Tool Dispatch — CortexACT
 //!
-//! Single entry-point `execute_single(tool_name, args, workspace_roots)` that dispatches to
+//! Single entry-point `execute_single(tool_name, args, workspace_roots, workspace_names)` that dispatches to
 //! every registered tool.  Returns `Ok(success_text)` / `Err(error_message)`.
 //!
 //! Used by:
@@ -15,7 +15,14 @@ use std::path::PathBuf;
 /// # Returns
 /// * `Ok(text)` – tool succeeded; `text` is the human/agent-readable output.
 /// * `Err(msg)` – tool failed; `msg` is a human-readable error string.
-pub fn execute_single(name: &str, args: &Value, workspace_roots: &[PathBuf]) -> Result<String, String> {
+pub fn execute_single(
+    name: &str,
+    args: &Value,
+    workspace_roots: &[PathBuf],
+    workspace_names: &[String],
+) -> Result<String, String> {
+    crate::act::pathing::set_workspace_aliases(workspace_roots, workspace_names);
+
     // ── Convenience helpers ───────────────────────────────────────────────
     macro_rules! req_str {
         ($field:expr) => {
@@ -139,13 +146,26 @@ pub fn execute_single(name: &str, args: &Value, workspace_roots: &[PathBuf]) -> 
                     .and_then(|v| v.as_str())
                     .unwrap_or("replace")
                     .to_string();
+                // Accept 'content' as a backward-compat alias for 'code'.
                 let code = item
                     .get("code")
+                    .or_else(|| item.get("content"))
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string();
                 if target.is_empty() {
                     return Err("Each edit must have a 'target'".to_string());
+                }
+                // Guard: replace/insert actions MUST supply non-empty code.
+                // Without this check a missing 'code' field silently deletes the target.
+                if matches!(action.as_str(), "replace" | "insert_before" | "insert_after")
+                    && code.is_empty()
+                {
+                    return Err(format!(
+                        "Action '{}' on target '{}' requires non-empty 'code' (replacement content). \
+                         Use the 'code' field (not 'content') for replacement text.",
+                        action, target
+                    ));
                 }
                 edits.push(crate::act::markup_editor::MarkupEdit {
                     target,
@@ -256,11 +276,27 @@ pub fn execute_single(name: &str, args: &Value, workspace_roots: &[PathBuf]) -> 
         }
 
         // ── Search / query helpers ────────────────────────────────────────
-        "cortex_semantic_code_search" => crate::act::semantic_search::run(args, workspace_roots)
-            .map_err(|e| format!("cortex_semantic_code_search failed: {e}")),
+        "cortex_semantic_code_search" => {
+            let mut remapped = args.clone();
+            if let Some(project_path) = args.get("project_path").and_then(|v| v.as_str()) {
+                remapped["project_path"] = Value::String(
+                    crate::act::pathing::resolve_path_string(workspace_roots, project_path),
+                );
+            }
+            crate::act::semantic_search::run(&remapped, workspace_roots)
+                .map_err(|e| format!("cortex_semantic_code_search failed: {e}"))
+        }
 
-        "cortex_search_exact" => crate::act::search_exact::run(args, workspace_roots)
-            .map_err(|e| format!("cortex_search_exact failed: {e}")),
+        "cortex_search_exact" => {
+            let mut remapped = args.clone();
+            if let Some(project_path) = args.get("project_path").and_then(|v| v.as_str()) {
+                remapped["project_path"] = Value::String(
+                    crate::act::pathing::resolve_path_string(workspace_roots, project_path),
+                );
+            }
+            crate::act::search_exact::run(&remapped, workspace_roots)
+                .map_err(|e| format!("cortex_search_exact failed: {e}"))
+        }
 
         "cortex_mcp_hot_reload" => crate::act::hot_reload::run(args)
             .map_err(|e| format!("cortex_mcp_hot_reload failed: {e}")),

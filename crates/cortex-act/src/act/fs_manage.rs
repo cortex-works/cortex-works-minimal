@@ -186,15 +186,16 @@ fn handle_mkdir(args: &Value, workspace_roots: &[PathBuf]) -> Result<String> {
 
     for raw_path in &paths {
         let path = crate::act::pathing::resolve_path(workspace_roots, raw_path);
+        let display_path = path.to_string_lossy().into_owned();
         match std::fs::create_dir_all(&path)
-            .with_context(|| format!("Failed to create directory '{}'", raw_path))
+            .with_context(|| format!("Failed to create directory '{}'", display_path))
         {
             Ok(_) => {
-                tracing::info!("[fs_manage] Created directory: {}", raw_path);
+                tracing::info!("[fs_manage] Created directory: {}", display_path);
                 created += 1;
             }
             Err(e) => {
-                failed.push(format!("'{}' ({})", raw_path, e));
+                failed.push(format!("'{}' ({})", display_path, e));
             }
         }
     }
@@ -224,8 +225,9 @@ fn handle_delete(args: &Value, workspace_roots: &[PathBuf]) -> Result<String> {
 
     for raw_path in &paths {
         let path = crate::act::pathing::resolve_path(workspace_roots, raw_path);
+        let display_path = path.to_string_lossy().into_owned();
         if !path.exists() {
-            failed.push(format!("'{}' (Not Found)", raw_path));
+            failed.push(format!("'{}' (Not Found)", display_path));
             continue;
         }
 
@@ -233,24 +235,24 @@ fn handle_delete(args: &Value, workspace_roots: &[PathBuf]) -> Result<String> {
 
         let remove_result = if was_dir {
             std::fs::remove_dir_all(&path)
-                .with_context(|| format!("Failed to remove directory '{}'", raw_path))
+                .with_context(|| format!("Failed to remove directory '{}'", display_path))
         } else {
             std::fs::remove_file(&path)
-                .with_context(|| format!("Failed to delete '{}'", raw_path))
+                .with_context(|| format!("Failed to delete '{}'", display_path))
         };
 
         match remove_result {
             Ok(_) => {
                 if was_dir {
-                    tracing::info!("[fs_manage] Removed directory: {}", raw_path);
+                    tracing::info!("[fs_manage] Removed directory: {}", display_path);
                 } else {
-                    tracing::info!("[fs_manage] Deleted file: {}", raw_path);
+                    tracing::info!("[fs_manage] Deleted file: {}", display_path);
                 }
                 let project = find_project_root(&path);
                 crate::fire_tombstone(project, path.to_string_lossy().into_owned());
                 deleted += 1;
             }
-            Err(e) => failed.push(format!("'{}' ({})", raw_path, e)),
+            Err(e) => failed.push(format!("'{}' ({})", display_path, e)),
         }
     }
 
@@ -273,9 +275,11 @@ fn handle_rename(args: &Value, workspace_roots: &[PathBuf]) -> Result<String> {
 
     let src = crate::act::pathing::resolve_path(workspace_roots, &src_str);
     let dst = crate::act::pathing::resolve_path(workspace_roots, &dst_str);
+    let src_display = src.to_string_lossy().into_owned();
+    let dst_display = dst.to_string_lossy().into_owned();
 
     if !src.exists() {
-        return Err(anyhow::anyhow!("Source does not exist: {}", src_str));
+        return Err(anyhow::anyhow!("Source does not exist: {}", src_display));
     }
 
     // Auto-create destination parent directories if they don't exist.
@@ -287,15 +291,15 @@ fn handle_rename(args: &Value, workspace_roots: &[PathBuf]) -> Result<String> {
     }
 
     std::fs::rename(&src, &dst)
-        .with_context(|| format!("Failed to rename '{}' → '{}'", src_str, dst_str))?;
-    tracing::info!("[fs_manage] Renamed: '{}' → '{}'", src_str, dst_str);
+        .with_context(|| format!("Failed to rename '{}' → '{}'", src_display, dst_display))?;
+    tracing::info!("[fs_manage] Renamed: '{}' → '{}'", src_display, dst_display);
 
     // Tombstone the old path, then queue index of the new path.
     let project = find_project_root(&src);
     crate::fire_tombstone(project.clone(), src.to_string_lossy().into_owned());
     crate::fire_index_modified(project, dst.to_string_lossy().into_owned());
 
-    Ok(format!("Renamed: `{}` → `{}`", src_str, dst_str))
+    Ok(format!("Renamed: `{}` → `{}`", src_display, dst_display))
 }
 
 // ── copy ──────────────────────────────────────────────────────────────────────
@@ -305,9 +309,11 @@ fn handle_copy(args: &Value, workspace_roots: &[PathBuf]) -> Result<String> {
 
     let src = crate::act::pathing::resolve_path(workspace_roots, &src_str);
     let dst = crate::act::pathing::resolve_path(workspace_roots, &dst_str);
+    let src_display = src.to_string_lossy().into_owned();
+    let dst_display = dst.to_string_lossy().into_owned();
 
     if !src.exists() {
-        return Err(anyhow::anyhow!("Source does not exist: {}", src_str));
+        return Err(anyhow::anyhow!("Source does not exist: {}", src_display));
     }
 
     if let Some(parent) = dst.parent() {
@@ -318,14 +324,14 @@ fn handle_copy(args: &Value, workspace_roots: &[PathBuf]) -> Result<String> {
     }
 
     std::fs::copy(&src, &dst)
-        .with_context(|| format!("Failed to copy '{}' → '{}'", src_str, dst_str))?;
-    tracing::info!("[fs_manage] Copied: '{}' → '{}'", src_str, dst_str);
+        .with_context(|| format!("Failed to copy '{}' → '{}'", src_display, dst_display))?;
+    tracing::info!("[fs_manage] Copied: '{}' → '{}'", src_display, dst_display);
 
     // Queue index of the new copy so it appears in the Vector DB.
     let project = find_project_root(&src);
     crate::fire_index_modified(project, dst.to_string_lossy().into_owned());
 
-    Ok(format!("Copied: `{}` → `{}`", src_str, dst_str))
+    Ok(format!("Copied: `{}` → `{}`", src_display, dst_display))
 }
 
 // ── Helper: project root detection ───────────────────────────────────────────

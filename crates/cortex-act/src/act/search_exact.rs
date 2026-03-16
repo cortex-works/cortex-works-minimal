@@ -25,6 +25,7 @@ pub fn run(args: &Value, workspace_roots: &[PathBuf]) -> Result<String, String> 
     // ── Parameters ────────────────────────────────────────────────────────
     let pattern = args
         .get("regex_pattern")
+        .or_else(|| args.get("pattern")) // accept 'pattern' as alias
         .and_then(|v| v.as_str())
         .filter(|s| !s.is_empty())
         .ok_or_else(|| "'regex_pattern' is required and must be a non-empty string".to_string())?;

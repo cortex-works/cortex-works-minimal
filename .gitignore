@@ -52,4 +52,3 @@ crates/cortex-act/labs/
 # ─── Stale proposal docs ──────────────────────────────────────────────────
 ARCHITECTURE_V2_PROPOSAL.md
 labsreview-tools.txt
-.github/copilot-instructions.md

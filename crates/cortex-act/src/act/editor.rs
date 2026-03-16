@@ -491,6 +491,8 @@ mod tests {
         assert_eq!(&source[adjusted..def_start + 3], "@app.get(\"/\")\ndef");
     }
 
+    // `PermissionsExt::from_mode` is Unix-only; skip this test on Windows.
+    #[cfg(unix)]
     #[test]
     fn permission_guard_catches_readonly() {
         use std::os::unix::fs::PermissionsExt;

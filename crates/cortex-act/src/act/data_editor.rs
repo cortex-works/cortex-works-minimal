@@ -110,39 +110,43 @@ fn upsert_into_parent(
     }
 
     let segments = parse_path(target);
-    if segments.len() < 2 {
-        anyhow::bail!(
-            "Cannot upsert at '{}': path needs at least two segments \
-             (e.g., $.parent.new_key)",
-            target
-        );
+    if segments.is_empty() {
+        anyhow::bail!("Cannot upsert at '{}': empty path", target);
     }
 
     let new_key = segments.last().unwrap().clone();
-    let parent_path = format!("$.{}", segments[..segments.len() - 1].join("."));
 
-    let (parent_start, parent_end) =
+    // When there is only one segment the parent is the root object ($).
+    // find_node_range("$") returns the whole document node, which is the
+    // JSON object itself when the file contains a top-level `{...}`.
+    let (parent_start, parent_end) = if segments.len() == 1 {
+        find_node_range(source, lang, ext, "$").with_context(|| {
+            format!("Cannot read root object for upsert of key '{}'", new_key)
+        })?
+    } else {
+        let parent_path = format!("$.{}", segments[..segments.len() - 1].join("."));
         find_node_range(source, lang, ext, &parent_path).with_context(|| {
             format!(
                 "Parent path '{}' not found; cannot upsert key '{}'",
                 parent_path, new_key
             )
-        })?;
+        })?
+    };
 
     let parent_src = &source[parent_start..parent_end];
 
     // Verify the parent is a JSON object
     let open_pos = parent_src.find('{').ok_or_else(|| {
         anyhow::anyhow!(
-            "Parent at '{}' is not a JSON object (no '{{' found). \
+            "Target '{}' parent is not a JSON object (no '{{' found). \
              Use action=\"replace\" to overwrite the entire parent value.",
-            parent_path
+            target
         )
     })?;
     let close_pos = parent_src.rfind('}').ok_or_else(|| {
         anyhow::anyhow!(
-            "Malformed JSON: no closing '}}' in parent object at '{}'",
-            parent_path
+            "Malformed JSON: no closing '}}' in parent object for target '{}'",
+            target
         )
     })?;
 
@@ -503,6 +507,28 @@ mod tests {
         assert!(
             result.contains("\"test\":\"jest\""),
             "should insert into empty object: {}",
+            result
+        );
+    }
+
+    #[test]
+    fn upsert_adds_top_level_key() {
+        // Single-segment path ($.newKey) — inserts into the root object.
+        let path = write_temp_json(r#"{"host":"localhost","port":5432}"#);
+        let edits = vec![super::DataEdit {
+            target: "$.ssl".to_string(),
+            action: "set".to_string(),
+            value: Some("true".to_string()),
+        }];
+        let result = super::apply_data_edits(&path, edits).unwrap();
+        assert!(
+            result.contains("\"ssl\":true"),
+            "should insert top-level key: {}",
+            result
+        );
+        assert!(
+            result.contains("\"host\":\"localhost\""),
+            "existing keys must remain: {}",
             result
         );
     }

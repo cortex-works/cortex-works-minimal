@@ -298,14 +298,40 @@ fn find_xml_range(
                 }
             }
             "id" => {
-                if node.kind() == "attribute" {
-                    if let Some(name_node) = node.child_by_field_name("name") {
-                        if &source[name_node.start_byte()..name_node.end_byte()] == "id" {
-                            if let Some(val_node) = node.child_by_field_name("value") {
-                                let raw = &source[val_node.start_byte()..val_node.end_byte()];
-                                if raw.trim_matches('"').trim_matches('\'') == t_val {
-                                    return node.parent().map(|p| (p.start_byte(), p.end_byte()));
-                                }
+                // HTML uses lowercase "attribute" with field-named "name"/"value" children.
+                // XML  uses "Attribute" with unnamed "Name"/"AttValue" children.
+                let kind = node.kind();
+                if kind == "attribute" || kind == "Attribute" {
+                    // Resolve attribute name: try field access (HTML) then named-child (XML).
+                    let attr_name = node
+                        .child_by_field_name("name")
+                        .and_then(|n| source.get(n.start_byte()..n.end_byte()))
+                        .map(str::to_string)
+                        .or_else(|| {
+                            let mut c = node.walk();
+                            node.named_children(&mut c)
+                                .find(|n| n.kind() == "Name")
+                                .and_then(|n| source.get(n.start_byte()..n.end_byte()))
+                                .map(str::to_string)
+                        });
+
+                    if attr_name.as_deref() == Some("id") {
+                        // Resolve attribute value: try field access (HTML) then named-child (XML).
+                        let attr_val = node
+                            .child_by_field_name("value")
+                            .and_then(|n| source.get(n.start_byte()..n.end_byte()))
+                            .map(str::to_string)
+                            .or_else(|| {
+                                let mut c = node.walk();
+                                node.named_children(&mut c)
+                                    .find(|n| n.kind() == "AttValue")
+                                    .and_then(|n| source.get(n.start_byte()..n.end_byte()))
+                                    .map(str::to_string)
+                            });
+
+                        if let Some(raw) = attr_val {
+                            if raw.trim_matches('"').trim_matches('\'') == t_val {
+                                return node.parent().map(|p| (p.start_byte(), p.end_byte()));
                             }
                         }
                     }
@@ -322,11 +348,40 @@ fn find_xml_range(
 }
 
 fn element_tag_name(element: Node<'_>, source: &str) -> Option<String> {
-    let start_tag = element.child_by_field_name("start_tag")?;
-    let name_node = start_tag
-        .child_by_field_name("tag_name")
-        .or_else(|| start_tag.child_by_field_name("name"))?;
-    Some(source[name_node.start_byte()..name_node.end_byte()].to_string())
+    // ── HTML grammar (tree-sitter-html) ──────────────────────────────────
+    // element has a named "start_tag" field, which has a "tag_name" field.
+    if let Some(start_tag) = element.child_by_field_name("start_tag") {
+        let name_node = start_tag
+            .child_by_field_name("tag_name")
+            .or_else(|| start_tag.child_by_field_name("name"))
+            .or_else(|| {
+                // Defensive fallback: first named child whose kind looks like a name
+                let mut c = start_tag.walk();
+                start_tag.named_children(&mut c).find(|n| {
+                    matches!(n.kind(), "tag_name" | "identifier" | "Name")
+                })
+            })?;
+        return Some(source[name_node.start_byte()..name_node.end_byte()].to_string());
+    }
+
+    // ── XML grammar (tree-sitter-xml 0.7+) ───────────────────────────────
+    // element children are STag (start+end) or EmptyElemTag (self-closing).
+    // Neither has named field entries; the tag name is the first `Name` child.
+    let mut cursor = element.walk();
+    for child in element.named_children(&mut cursor) {
+        match child.kind() {
+            "EmptyElemTag" | "STag" => {
+                let mut c2 = child.walk();
+                if let Some(name_node) = child.named_children(&mut c2).find(|n| n.kind() == "Name") {
+                    return Some(
+                        source[name_node.start_byte()..name_node.end_byte()].to_string(),
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 // ── Post-edit validation ───────────────────────────────────────────────────

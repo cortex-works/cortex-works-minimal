@@ -238,17 +238,35 @@ pub fn execute_single(
                 } else if base.join("go.mod").exists() {
                     "go build ./... 2>&1".to_string()
                 } else if base.join("pom.xml").exists() {
-                    if base.join("mvnw").exists() {
+                    // Use the project wrapper when available; fall back to
+                    // system install.  On Windows, wrappers are .cmd/.bat files.
+                    #[cfg(windows)]
+                    let mvnw = if base.join("mvnw.cmd").exists() || base.join("mvnw.bat").exists() {
+                        "mvnw.cmd compile -q".to_string()
+                    } else {
+                        "mvn compile -q".to_string()
+                    };
+                    #[cfg(not(windows))]
+                    let mvnw = if base.join("mvnw").exists() {
                         "./mvnw compile -q 2>&1".to_string()
                     } else {
                         "mvn compile -q 2>&1".to_string()
-                    }
+                    };
+                    mvnw
                 } else if base.join("build.gradle").exists() || base.join("build.gradle.kts").exists() {
-                    if base.join("gradlew").exists() {
+                    #[cfg(windows)]
+                    let gradlew = if base.join("gradlew.bat").exists() {
+                        "gradlew.bat assemble -q".to_string()
+                    } else {
+                        "gradle assemble -q".to_string()
+                    };
+                    #[cfg(not(windows))]
+                    let gradlew = if base.join("gradlew").exists() {
                         "./gradlew assemble -q 2>&1".to_string()
                     } else {
                         "gradle assemble -q 2>&1".to_string()
-                    }
+                    };
+                    gradlew
                 } else {
                     return Err(format!(
                         "No supported manifest found in '{}'. \

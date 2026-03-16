@@ -4,11 +4,24 @@
 //! Intended for short, fast commands (`git diff`, `cargo check`, `ls -la`).
 //! Not intended for long-running watch mode or background servers.
 //!
+//! ## Cross-platform shell
+//! - Unix  (macOS / Linux): `sh -c <command>`
+//! - Windows             : `cmd /C <command>`
+//!
 //! ## Timeout design
 //!
 //! The child process is spawned with piped stdout/stderr.
-//! A monitoring thread polls the start time and issues SIGKILL via
-//! `kill -9 <pid>` when the timeout is exceeded — no `libc` dependency needed.
+//! A monitoring thread drains output and waits; the main thread cancels via
+//! `recv_timeout`.  On expiry the child is force-killed:
+//! - Unix    : `kill -9 <pid>`
+//! - Windows : `taskkill /PID <pid> /F`
+//! No `libc` dependency is required — only stdlib + one extra process spawn.
+//!
+//! ## PATH augmentation (Unix only)
+//! The MCP server may be started by an IDE with a reduced `PATH` that omits
+//! user-local tool directories (e.g. `~/.cargo/bin`).  `run_sync` prepends
+//! the following directories when they exist and are not already in `PATH`:
+//! `~/.cargo/bin`, `~/.local/bin`, `/usr/local/bin`.
 
 use anyhow::{Context, Result};
 use regex::Regex;
@@ -189,18 +202,79 @@ pub fn run_sync_with_problem_matcher(
 
 
 
-/// Run `command` synchronously via `sh -c`. Blocks until done or `timeout_secs` elapsed.
+/// Build a `Command` that runs `command` via the platform-appropriate shell.
 ///
-/// On timeout the child process is killed via `kill -9 <pid>`.
+/// - Unix    : `sh -c <command>`  (also augments PATH — see [`augment_unix_path`])
+/// - Windows : `cmd /C <command>`
+fn build_shell_command(command: &str) -> Command {
+    #[cfg(not(windows))]
+    {
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c").arg(command);
+        augment_unix_path(&mut cmd);
+        cmd
+    }
+    #[cfg(windows)]
+    {
+        let mut cmd = Command::new("cmd");
+        cmd.args(["/C", command]);
+        cmd
+    }
+}
+
+/// Unix only — prepend common user-local tool directories to the child's
+/// `PATH` when they exist but are absent from the current process `PATH`.
+///
+/// This is necessary on Linux where IDEs (e.g. VS Code) may start the MCP
+/// server with a reduced `PATH` that does not include `~/.cargo/bin` or
+/// `~/.local/bin`, causing commands like `cargo`, `node`, and pip-installed
+/// scripts to be silently unavailable inside `cortex_act_shell_exec`.
+///
+/// Directories added (in prepend order, highest priority first):
+/// 1. `~/.cargo/bin`  — Rust toolchain installed via rustup
+/// 2. `~/.local/bin`  — pipx / pip --user / manual scripts
+/// 3. `/usr/local/bin` — Homebrew (macOS), system packages
+#[cfg(not(windows))]
+fn augment_unix_path(cmd: &mut Command) {
+    let home = match std::env::var("HOME") {
+        Ok(h) if !h.is_empty() => h,
+        _ => return,
+    };
+    let current_path = std::env::var("PATH").unwrap_or_default();
+    // Split on `:` so we do exact component comparisons, not substring matches.
+    let path_components: Vec<&str> = current_path.split(':').collect();
+
+    let candidates = [
+        format!("{home}/.cargo/bin"),
+        format!("{home}/.local/bin"),
+        "/usr/local/bin".to_string(),
+    ];
+
+    let mut prepend: Vec<String> = Vec::new();
+    for dir in &candidates {
+        if !path_components.contains(&dir.as_str()) && std::path::Path::new(dir).is_dir() {
+            prepend.push(dir.clone());
+        }
+    }
+
+    if !prepend.is_empty() {
+        let new_path = format!("{}:{current_path}", prepend.join(":"));
+        cmd.env("PATH", new_path);
+    }
+}
+
+/// Run `command` synchronously via the platform shell.  Blocks until done
+/// or `timeout_secs` elapsed.
+///
+/// On timeout the child process is force-killed:
+/// - Unix    : `kill -9 <pid>`
+/// - Windows : `taskkill /PID <pid> /F`
 pub fn run_sync(command: &str, cwd: Option<&str>, timeout_secs: u64) -> Result<ShellResult> {
     let timeout = Duration::from_secs(timeout_secs.max(1));
     let start = Instant::now();
 
-    let mut cmd = Command::new("sh");
-    cmd.arg("-c")
-        .arg(command)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+    let mut cmd = build_shell_command(command);
+    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
 
     if let Some(dir) = cwd {
         cmd.current_dir(dir);
@@ -229,13 +303,18 @@ pub fn run_sync(command: &str, cwd: Option<&str>, timeout_secs: u64) -> Result<S
         // ── Child wait_with_output() itself returned an IO error ──────────
         Ok(Err(e)) => Err(e).context("wait_with_output failed"),
 
-        // ── Timeout — kill the process ────────────────────────────────────
+        // ── Timeout — force-kill the child process ────────────────────────
         Err(_recv_timeout) => {
-            // Best-effort SIGKILL. Works on macOS / Linux.
+            // Best-effort kill.  Uses only stdlib + one extra process spawn
+            // so no libc / windows-sys dependency is needed.
+            #[cfg(not(windows))]
             let _ = Command::new("kill").args(["-9", &pid.to_string()]).output();
+            #[cfg(windows)]
+            let _ = Command::new("taskkill")
+                .args(["/PID", &pid.to_string(), "/F"])
+                .output();
 
-            // Drain the thread so we don't leak it (it will finish quickly
-            // after the process is killed).
+            // Drain the thread so we don't leak it (finishes quickly after kill).
             let _ = rx.recv_timeout(Duration::from_secs(2));
 
             Ok(ShellResult {

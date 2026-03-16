@@ -1,0 +1,54 @@
+{
+  "tsc": {
+    "pattern": "^(.+?)\\((\\d+),(\\d+)\\):\\s+(error|warning)\\s+TS\\d+:\\s+(.+)$",
+    "groups": {
+      "file": 1,
+      "line": 2,
+      "severity": 4,
+      "message": 5
+    }
+  },
+  "cargo": {
+    "pattern": "^([^:\\n]+):(\\d+):(\\d+):\\s*(error|warning|note):\\s*(.+)$",
+    "groups": {
+      "file": 1,
+      "line": 2,
+      "severity": 4,
+      "message": 5
+    }
+  },
+  "nextjs": {
+    "pattern": "^(\\.?\\/?[^:\\n]+):(\\d+):(\\d+)\\s*-\\s*(error|warning):\\s*(.+)$",
+    "groups": {
+      "file": 1,
+      "line": 2,
+      "severity": 4,
+      "message": 5
+    }
+  },
+  "flutter": {
+    "pattern": "^([^:\\n]+\\.dart):(\\d+):(\\d+):\\s*(Error|Warning):\\s*(.+)$",
+    "groups": {
+      "file": 1,
+      "line": 2,
+      "severity": 4,
+      "message": 5
+    }
+  },
+  "python": {
+    "pattern": "^([^:\\n]+\\.py):(\\d+):\\s*(\\w*(?:Error|Exception)|error|warning):\\s*(.+)$",
+    "groups": {
+      "file": 1,
+      "line": 2,
+      "severity": 3,
+      "message": 4
+    }
+  },
+  "generic": {
+    "pattern": "^(?:.*?\\b(Error:|Exception:|failed:)\\b\\s*)(.+)$",
+    "groups": {
+      "severity": 1,
+      "message": 2
+    }
+  }
+}

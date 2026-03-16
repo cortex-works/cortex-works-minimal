@@ -1,0 +1,147 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# cortex-works — Minimal Monorepo (14 tools)
+# ═══════════════════════════════════════════════════════════════════════════
+
+[workspace]
+resolver = "2"
+members = [
+    "crates/cortex-ast",   # AST analysis (4 tools)
+    "crates/cortex-act",   # File edits + shell (9 tools)
+    "crates/cortex-db",    # Shared DB/vector store (semantic search)
+    "crates/cortex-mcp",   # MCP gateway binary
+]
+
+# ── Shared package metadata ─────────────────────────────────────────────────
+[workspace.package]
+version     = "2.0.0"
+edition     = "2024"
+authors     = ["Thanon Aphithanawat <thanon@aphithanawat.me>"]
+license     = "MIT"
+repository  = "https://github.com/DevsHero/cortex-works"
+
+# ── Shared dependency versions ──────────────────────────────────────────────────────────
+[workspace.dependencies]
+
+# Async runtime
+tokio        = { version = "1.0",   features = ["full"] }
+futures-util = "0.3"
+
+# Serialisation
+serde       = { version = "1.0",   features = ["derive"] }
+serde_json  = "1.0"
+serde_yaml  = "0.9"
+toml        = "0.8"
+toml_edit   = "0.22"
+
+# Error handling
+anyhow      = "1.0"
+
+# CLI
+clap        = { version = "4.5",   features = ["derive"] }
+
+# Filesystem / paths
+dirs        = "6.0.0"
+ignore      = "0.4"
+glob        = "0.3"
+
+# Text / regex
+regex       = "1.10"
+quick-xml   = "0.31"
+
+# Time & identifiers
+chrono      = { version = "0.4",   features = ["serde"] }
+uuid        = { version = "1.0",   features = ["v4", "serde"] }
+
+# Hashing
+xxhash-rust = { version = "0.8",   features = ["xxh3"] }
+
+# Concurrency
+rayon       = "1.10"
+
+# Progress UI
+indicatif   = "0.17"
+
+# HTTP (sync) — used by cortex-act auto-healer + cortex-ast
+ureq        = { version = "2.12",  features = ["json"] }
+
+# Databases
+sqlparser   = "0.44.0"
+
+# LanceDB — vector store for cortex_semantic_code_search
+lancedb     = { version = "0.22", default-features = false }
+arrow-schema = "56"
+arrow-array  = "56"
+
+# Embeddings
+model2vec-rs = "0.1.4"
+
+# JSON Path
+serde_json_path = "0.7.2"
+
+# Tree-sitter — core
+tree-sitter          = { version = "0.26.5", features = ["wasm"] }
+tree-sitter-rust     = "0.21.0"
+tree-sitter-typescript = "0.21.0"
+tree-sitter-python   = "0.21.0"
+tree-sitter-json     = "0.24.8"
+tree-sitter-yaml     = "0.7.2"
+tree-sitter-md       = "0.5.2"
+tree-sitter-html     = "0.23.2"
+tree-sitter-xml      = "0.7.0"
+
+# Dev
+tempfile   = "3.15.0"
+
+# Observability
+tracing            = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+# ── Internal crates ─────────────────────────────────────────────────────────────
+cortex-ast  = { path = "crates/cortex-ast",  package = "cortexast" }
+cortex-act  = { path = "crates/cortex-act" }
+cortex-db   = { path = "crates/cortex-db" }
+
+# ── Dev profile — optimised for fast iteration ──────────────────────────────
+# `cargo build` / `cargo check` use this by default.
+# Key wins:
+#   - debug = 1 (file+line only) vs default 2 (full DWARF) → faster link
+#   - incremental = true ensures unchanged crates are never recompiled
+#   - [dev.package."*"] compiles ALL external deps at opt-level 2 ONCE and
+#     caches them; they will not recompile unless their version changes.
+[profile.dev]
+# opt-level = 1: compile our code with minimal opt (not 0 — avoids extra steps)
+# that the guide shows hits the sweet spot: 0 adds debug overhead, 2 is too slow
+opt-level   = 1
+debug       = 1
+incremental = true
+
+# External crates: compile optimized, strip debug info → cached forever by sccache
+[profile.dev.package."*"]
+opt-level = 2
+debug     = false
+
+# ── CI / quick-check profile ────────────────────────────────────────────────
+# Use with: cargo build --profile dev-fast
+# Maximum parallelism, no optimizations at all — validates code compiles.
+[profile.dev-fast]
+inherits       = "dev"
+codegen-units  = 256
+opt-level      = 0
+
+# ── Unified release profile ─────────────────────────────────────────────────
+[profile.release]
+lto           = "thin"
+codegen-units = 1
+strip         = true
+opt-level     = 3
+
+# Fast local iteration profile (use with: --profile release-fast)
+# Keeps release-like behavior but drastically reduces compile/link time.
+# First build ~3-4 min (deps cached); subsequent builds ~30-60 sec.
+[profile.release-fast]
+inherits        = "release"
+opt-level       = 2
+lto             = "off"
+codegen-units   = 64
+incremental     = true
+split-debuginfo = "unpacked"  # skips dsymutil merging step — major speedup on macOS

@@ -1,0 +1,38 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# cortex-mcp — Minimal MCP Gateway  (14 tools)
+#
+# Lean single-binary MCP server: AST analysis + code/file actions.
+# No sync daemon, no proxy, no mesh — just the tool engine.
+#
+# Build:   cargo build --release -p cortex-mcp
+# Binary:  target/release/cortex-mcp
+# ═══════════════════════════════════════════════════════════════════════════
+[package]
+name        = "cortex-mcp"
+description = "Minimal MCP Gateway — AST + Act in one binary (14 tools)."
+keywords    = ["llm", "mcp", "rust", "ai", "gateway"]
+categories  = ["command-line-utilities", "development-tools"]
+
+version.workspace    = true
+edition.workspace    = true
+authors.workspace    = true
+license.workspace    = true
+repository.workspace = true
+
+[[bin]]
+name = "cortex-mcp"
+path = "src/main.rs"
+
+[dependencies]
+serde_json.workspace         = true
+anyhow.workspace             = true
+tracing.workspace            = true
+tracing-subscriber.workspace = true
+
+cortexast  = { path = "../cortex-ast" }
+cortex-act = { path = "../cortex-act" }
+
+[dev-dependencies]
+tempfile.workspace = true
+cortex-db = { path = "../cortex-db" }
+

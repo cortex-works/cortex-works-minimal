@@ -1,0 +1,47 @@
+[package]
+name        = "cortex-act"
+description = "The AI-Native Code Action Backend for LLM agents. Pure Rust MCP server that acts as the 'hands' — executing commands, patching files, and applying surgical code edits."
+keywords    = ["llm", "mcp", "code-action", "rust", "ast"]
+categories  = ["command-line-utilities", "development-tools"]
+
+version.workspace    = true
+edition.workspace    = true
+authors.workspace    = true
+license.workspace    = true
+repository.workspace = true
+
+[lib]
+name = "cortex_act"
+path = "src/lib.rs"
+
+[dependencies]
+serde.workspace         = true
+serde_json.workspace    = true
+anyhow.workspace        = true
+regex.workspace         = true
+ureq.workspace          = true
+tracing.workspace       = true
+strip-ansi-escapes      = "0.2"
+glob.workspace          = true
+xxhash-rust.workspace   = true
+
+# Tree-sitter for AST semantic patching
+tree-sitter.workspace       = true
+tree-sitter-rust.workspace  = true
+tree-sitter-json.workspace  = true
+tree-sitter-yaml.workspace  = true
+tree-sitter-md.workspace    = true
+tree-sitter-html.workspace  = true
+tree-sitter-xml.workspace   = true
+serde_json_path.workspace   = true
+
+# Data layer
+sqlparser.workspace = true
+
+# Memory retriever + One-Shot RAG
+cortex-db  = { path = "../cortex-db" }
+cortexast  = { path = "../cortex-ast" }
+ignore.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

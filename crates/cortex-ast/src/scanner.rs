@@ -1,0 +1,451 @@
+use anyhow::{Context, Result};
+use ignore::WalkBuilder;
+use ignore::overrides::{Override, OverrideBuilder};
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
+
+use crate::config::ABSOLUTE_MAX_FILE_BYTES;
+
+fn repomix_default_overrides(
+    repo_root: &Path,
+    exclude_dir_names: &[String],
+    extra_glob_excludes: &[String],
+) -> Result<Override> {
+    let mut ob = OverrideBuilder::new(repo_root);
+
+    // Repomix-style optimization list (common high-noise artifacts).
+    // Note: For directories, include patterns for both the directory entry and its descendants,
+    // otherwise walkers may still descend into the directory.
+
+    // NOTE: Override globs behave like ripgrep's `--glob` rules:
+    // - If you add any *include* glob (no leading '!'), the walker becomes whitelisted.
+    // - Globs with a leading '!' are *excludes*.
+    // We want a normal walk (include everything) with a strong default exclude list.
+
+    // Lockfiles
+    ob.add("!**/*.lock")?;
+    ob.add("!**/package-lock.json")?;
+    ob.add("!**/pnpm-lock.yaml")?;
+    ob.add("!**/yarn.lock")?;
+    ob.add("!**/Cargo.lock")?;
+
+    // Sourcemaps + images/icons
+    ob.add("!**/*.map")?;
+    ob.add("!**/*.svg")?;
+    ob.add("!**/*.png")?;
+    ob.add("!**/*.ico")?;
+    ob.add("!**/*.jpg")?;
+    ob.add("!**/*.jpeg")?;
+    ob.add("!**/*.gif")?;
+
+    // Common junk file types (binaries, generated, etc.)
+    ob.add("!**/*.pyc")?;
+    ob.add("!**/*.pyo")?;
+    ob.add("!**/*.pyd")?;
+    ob.add("!**/*.class")?;
+    ob.add("!**/*.o")?;
+    ob.add("!**/*.a")?;
+    ob.add("!**/*.so")?;
+    ob.add("!**/*.dylib")?;
+    ob.add("!**/*.dll")?;
+    ob.add("!**/*.exe")?;
+    ob.add("!**/*.wasm")?;
+    ob.add("!**/*.min.js")?;
+    ob.add("!**/*.min.css")?;
+
+    // Common build outputs / heavy dirs (multi-language)
+    for d in [
+        // VCS
+        ".git",
+        // JS/TS
+        "node_modules",
+        "dist",
+        "build",
+        "coverage",
+        ".next",
+        ".nuxt",
+        ".vscode-test",
+        ".vscode",
+        "out",
+        ".cortexast",
+        ".turbo",
+        ".svelte-kit",
+        // Rust
+        "target",
+        // Python
+        "__pycache__",
+        ".venv",
+        "venv",
+        ".env",
+        "env",
+        ".tox",
+        ".pytest_cache",
+        ".mypy_cache",
+        ".ruff_cache",
+        "htmlcov",
+        ".hypothesis",
+        "site-packages",
+        // Dart / Flutter
+        ".dart_tool",
+        ".pub",
+        ".pub-cache",
+        ".flutter-plugins",
+        ".flutter-plugins-dependencies",
+        // Go
+        "vendor",
+        // Ruby
+        ".bundle",
+        // Java / JVM
+        ".gradle",
+        ".m2",
+        // Misc
+        ".cortexast",
+        ".terraform",
+        ".serverless",
+        "tmp",
+        "temp",
+        "logs",
+        ".cache",
+    ] {
+        ob.add(&format!("!**/{d}"))?;
+        ob.add(&format!("!**/{d}/**"))?;
+    }
+
+    // Project-specific excluded dirs
+    for d in exclude_dir_names {
+        let d = d.trim().trim_matches('/');
+        if d.is_empty() {
+            continue;
+        }
+        ob.add(&format!("!**/{d}"))?;
+        ob.add(&format!("!**/{d}/**"))?;
+    }
+
+    // Extra glob excludes from .code-workspace settings or caller overrides.
+    for pattern in extra_glob_excludes {
+        let p = pattern.trim();
+        if !p.is_empty() {
+            ob.add(p)?;
+        }
+    }
+
+    Ok(ob.build()?)
+}
+
+#[derive(Debug, Clone)]
+pub struct FileEntry {
+    pub abs_path: PathBuf,
+    pub rel_path: PathBuf,
+    pub bytes: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct ScanOptions {
+    pub repo_root: PathBuf,
+    pub target: PathBuf,
+    pub max_file_bytes: u64,
+    pub exclude_dir_names: Vec<String>,
+    /// Additional workspace roots for multi-root workspaces (VS Code `.code-workspace`,
+    /// Zed multi-project, JetBrains polyrepo). When non-empty, `scan_workspace` iterates
+    /// every root independently and prefixes relative paths with `[FolderName]/` to avoid
+    /// cross-root path collisions. When empty, `repo_root` + `target` are used (single-root).
+    pub workspace_roots: Vec<PathBuf>,
+    /// Extra glob-style exclusion patterns injected from `.code-workspace` settings or the
+    /// caller. Each entry must carry the `!` prefix, e.g. `!**/out/**`.
+    pub extra_glob_excludes: Vec<String>,
+}
+
+impl ScanOptions {
+    pub fn target_root(&self) -> PathBuf {
+        if self.target.is_absolute() {
+            self.target.clone()
+        } else {
+            self.repo_root.join(&self.target)
+        }
+    }
+}
+
+pub fn scan_workspace(opts: &ScanOptions) -> Result<Vec<FileEntry>> {
+    // ── Multi-root dispatch ──────────────────────────────────────────────────────
+    // When `workspace_roots` has 2+ entries (VS Code multi-root workspace, Zed
+    // multi-project, JetBrains polyrepo), scan each root independently with its own
+    // per-root .gitignore / override stack, then merge results prefixed with
+    // `[FolderName]/` so paths are unambiguous across roots.
+    if opts.workspace_roots.len() > 1 {
+        let mut all_entries: Vec<FileEntry> = Vec::new();
+        for root in &opts.workspace_roots {
+            let root_name = root
+                .file_name()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "root".to_string());
+            // Recursive call with a single-root ScanOptions (workspace_roots empty →
+            // avoids infinite recursion).
+            let sub_opts = ScanOptions {
+                repo_root: root.clone(),
+                workspace_roots: Vec::new(),
+                target: PathBuf::from("."),
+                max_file_bytes: opts.max_file_bytes,
+                exclude_dir_names: opts.exclude_dir_names.clone(),
+                extra_glob_excludes: opts.extra_glob_excludes.clone(),
+            };
+            let entries = scan_workspace(&sub_opts)?;
+            for mut e in entries {
+                // Prefix rel_path with [FolderName]/ to avoid cross-root collisions.
+                e.rel_path = PathBuf::from(format!("[{root_name}]")).join(&e.rel_path);
+                all_entries.push(e);
+            }
+        }
+        all_entries.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
+        return Ok(all_entries);
+    }
+
+    let target_root = opts.target_root();
+
+    let meta = std::fs::metadata(&target_root)
+        .with_context(|| format!("Target does not exist: {}", target_root.display()))?;
+
+    if meta.is_file() {
+        return scan_single_file(&opts.repo_root, &target_root, opts.max_file_bytes)
+            .map(|v| v.into_iter().collect());
+    }
+
+    let mut entries = Vec::new();
+
+    // Merge ScanOptions.extra_glob_excludes with any patterns found in a
+    // .code-workspace file at the repo root (opportunistic, non-fatal).
+    let mut effective_glob_excludes = opts.extra_glob_excludes.clone();
+    if let Some(ws_file) = find_code_workspace_file(&opts.repo_root) {
+        effective_glob_excludes.extend(parse_code_workspace_excludes(&ws_file));
+    }
+
+    let overrides = repomix_default_overrides(
+        &opts.repo_root,
+        &opts.exclude_dir_names,
+        &effective_glob_excludes,
+    )?;
+
+    // Hard exclude by directory component name. This is intentionally redundant with overrides,
+    // because overrides alone are easy to misconfigure and we must never descend into heavy dirs
+    // like `.git/` or `target/`.
+    let mut excluded_dir_names: HashSet<String> = HashSet::new();
+    for d in &opts.exclude_dir_names {
+        let d = d.trim().trim_matches('/');
+        if !d.is_empty() {
+            excluded_dir_names.insert(d.to_string());
+        }
+    }
+
+    let walker = WalkBuilder::new(&target_root)
+        .standard_filters(true) // .gitignore, .ignore, hidden, etc.
+        .overrides(overrides)
+        .filter_entry(move |dent| {
+            // Skip excluded directories by name (prevents descending).
+            if dent.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
+                if let Some(name) = dent.path().file_name().and_then(|s| s.to_str()) {
+                    if excluded_dir_names.contains(name) {
+                        return false;
+                    }
+                }
+            }
+            true
+        })
+        .build();
+
+    for item in walker {
+        let dent = match item {
+            Ok(d) => d,
+            Err(_) => continue,
+        };
+
+        if !dent.file_type().map(|ft| ft.is_file()).unwrap_or(false) {
+            continue;
+        }
+
+        let abs_path = dent.into_path();
+
+        let bytes = match std::fs::metadata(&abs_path).map(|m| m.len()) {
+            Ok(b) => b,
+            Err(_) => continue,
+        };
+
+        // Hard absolute cap — always skip before any config override can raise it.
+        if bytes > ABSOLUTE_MAX_FILE_BYTES {
+            crate::debug_log!(
+                "[cortexast] skipping large file ({}): {}",
+                humanize_bytes(bytes),
+                abs_path.display()
+            );
+            continue;
+        }
+
+        if bytes == 0 || bytes > opts.max_file_bytes {
+            continue;
+        }
+
+        let rel_path = path_relative_to(&abs_path, &opts.repo_root)
+            .with_context(|| format!("Failed to relativize path: {}", abs_path.display()))?;
+
+        entries.push(FileEntry {
+            abs_path,
+            rel_path,
+            bytes,
+        });
+    }
+
+    entries.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
+    Ok(entries)
+}
+
+#[cfg(debug_assertions)]
+fn humanize_bytes(bytes: u64) -> String {
+    if bytes >= 1_048_576 {
+        format!("{:.1} MB", bytes as f64 / 1_048_576.0)
+    } else if bytes >= 1024 {
+        format!("{:.1} KB", bytes as f64 / 1024.0)
+    } else {
+        format!("{} B", bytes)
+    }
+}
+
+fn scan_single_file(
+    repo_root: &Path,
+    abs_path: &Path,
+    max_file_bytes: u64,
+) -> Result<Vec<FileEntry>> {
+    // Apply the same default overrides for consistency.
+    let ov = repomix_default_overrides(repo_root, &[], &[])?;
+
+    let rel_path = path_relative_to(abs_path, repo_root)?;
+    if ov.matched(&rel_path, /* is_dir */ false).is_ignore() {
+        return Ok(vec![]);
+    }
+
+    let bytes = std::fs::metadata(abs_path)?.len();
+    if bytes > ABSOLUTE_MAX_FILE_BYTES {
+        crate::debug_log!(
+            "[cortexast] skipping large file ({}): {}",
+            humanize_bytes(bytes),
+            abs_path.display()
+        );
+        return Ok(vec![]);
+    }
+    if bytes == 0 || bytes > max_file_bytes {
+        return Ok(vec![]);
+    }
+
+    Ok(vec![FileEntry {
+        abs_path: abs_path.to_path_buf(),
+        rel_path,
+        bytes,
+    }])
+}
+
+fn path_relative_to(path: &Path, base: &Path) -> Result<PathBuf> {
+    let rel = path
+        .strip_prefix(base)
+        .with_context(|| format!("{} is not under {}", path.display(), base.display()))?;
+    Ok(rel.to_path_buf())
+}
+
+// ───────────────────────────────────────────────────────────────────────────────
+// .code-workspace helpers
+// ───────────────────────────────────────────────────────────────────────────────
+
+/// Scan `dir` (non-recursively) for the first `*.code-workspace` file.
+/// Returns `None` when no such file exists (silently ignored).
+pub fn find_code_workspace_file(dir: &Path) -> Option<PathBuf> {
+    let rd = std::fs::read_dir(dir).ok()?;
+    for entry in rd.flatten() {
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+        if name_str.ends_with(".code-workspace") && entry.path().is_file() {
+            return Some(entry.path());
+        }
+    }
+    None
+}
+
+/// Parse `settings.files.exclude` and `settings.search.exclude` from a
+/// `.code-workspace` file and return exclusion glob patterns prefixed with `!`
+/// suitable for direct injection into an `ignore::overrides::OverrideBuilder`.
+///
+/// The function is fault-tolerant: any parse error yields an empty vec.
+pub fn parse_code_workspace_excludes(workspace_file: &Path) -> Vec<String> {
+    let text = match std::fs::read_to_string(workspace_file) {
+        Ok(t) => t,
+        Err(_) => return vec![],
+    };
+    // .code-workspace files are JSONC — strip single-line `//` comments before parsing.
+    let clean = strip_jsonc_comments(&text);
+    let v: serde_json::Value = match serde_json::from_str(&clean) {
+        Ok(v) => v,
+        Err(_) => return vec![],
+    };
+
+    let mut patterns: Vec<String> = Vec::new();
+    let settings = match v.get("settings") {
+        Some(s) => s,
+        None => return patterns,
+    };
+
+    for key in &["files.exclude", "search.exclude"] {
+        if let Some(obj) = settings.get(key).and_then(|v| v.as_object()) {
+            for (glob, val) in obj {
+                let enabled = match val {
+                    // Simple `true` — always excluded.
+                    serde_json::Value::Bool(b) => *b,
+                    // Object form `{ "when": "...", ... }` — treat as disabled
+                    // (conditional exclusions depend on IDE context we don't have).
+                    serde_json::Value::Object(_) => false,
+                    _ => false,
+                };
+                if enabled {
+                    // VS Code globs look like `**/node_modules`; prepend `!` for ignore crate.
+                    patterns.push(format!("!{glob}"));
+                }
+            }
+        }
+    }
+    patterns
+}
+
+/// Minimal JSONC comment stripper — removes `// ...` line comments while preserving
+/// the string literal content (handles escaped quotes inside strings).
+fn strip_jsonc_comments(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut in_string = false;
+    let mut escape_next = false;
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if escape_next {
+            escape_next = false;
+            out.push(c);
+            continue;
+        }
+        match c {
+            '\\' if in_string => {
+                escape_next = true;
+                out.push(c);
+            }
+            '"' => {
+                in_string = !in_string;
+                out.push(c);
+            }
+            '/' if !in_string => {
+                if chars.peek() == Some(&'/') {
+                    // Consume the rest of the line (comment).
+                    for ch in chars.by_ref() {
+                        if ch == '\n' {
+                            out.push('\n');
+                            break;
+                        }
+                    }
+                } else {
+                    out.push(c);
+                }
+            }
+            _ => out.push(c),
+        }
+    }
+    out
+}

@@ -1,0 +1,55 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# cortex-works — Root .gitignore (single source of truth for the workspace)
+# ═══════════════════════════════════════════════════════════════════════════
+
+# ─── Rust build artefacts ──────────────────────────────────────────────────
+/target/
+**/target/
+Cargo.lock            # library crates — lock managed at workspace root only
+
+# ─── Node.js / frontend ────────────────────────────────────────────────────
+node_modules/
+**/node_modules/
+**/*.vsix             # packaged VS Code extensions
+
+# ─── Build / distribution outputs ─────────────────────────────────────────
+/dist/
+**/dist/
+/build/
+**/build/
+/out/
+**/out/
+
+# ─── Tauri generated files ─────────────────────────────────────────────────
+apps/cortex-studio/src-tauri/target/
+apps/cortex-studio/src-tauri/gen/
+crates/cortex-sync/src-tauri/target/
+crates/cortex-sync/src-tauri/gen/
+
+# ─── Environment / Secrets ─────────────────────────────────────────────────
+.env
+.env.local
+.env.*.local
+
+# ─── macOS ─────────────────────────────────────────────────────────────────
+.DS_Store
+**/.DS_Store
+
+# ─── Cortex runtime data (never commit user data) ─────────────────────────
+.cortexast/
+**/.cortexast/
+
+# ─── IDE / AI tooling artefacts ───────────────────────────────────────────
+.specstory/
+**/.specstory/
+*.specstory
+chat.json
+
+# ─── Labs / experimental (not shippable) ──────────────────────────────────
+crates/cortex-ast/labs/
+crates/cortex-act/labs/
+
+# ─── Stale proposal docs ──────────────────────────────────────────────────
+ARCHITECTURE_V2_PROPOSAL.md
+labsreview-tools.txt
+.github/copilot-instructions.md

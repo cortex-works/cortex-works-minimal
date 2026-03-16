@@ -1,0 +1,35 @@
+[package]
+name        = "cortex-db"
+description = "Unified LanceDB data layer for the Cortex-Works ecosystem — Apache Arrow schema, vector storage, and metadata."
+version.workspace   = true
+edition.workspace   = true
+authors.workspace   = true
+license.workspace   = true
+repository.workspace = true
+
+[lib]
+name = "cortex_db"
+path = "src/lib.rs"
+
+[dependencies]
+# Workspace-managed versions
+anyhow.workspace      = true
+serde.workspace       = true
+serde_json.workspace  = true
+tokio.workspace       = true
+dirs.workspace        = true
+chrono.workspace      = true
+uuid.workspace        = true
+futures-util.workspace = true
+tracing.workspace     = true
+
+# LanceDB + Apache Arrow
+lancedb.workspace     = true
+arrow-schema.workspace = true
+arrow-array.workspace  = true
+
+# Embedding model for vector search
+model2vec-rs.workspace = true
+
+[dev-dependencies]
+tempfile.workspace   = true

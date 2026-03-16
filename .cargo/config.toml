@@ -1,0 +1,37 @@
+[build]
+# rustc-wrapper = "/opt/homebrew/bin/sccache"  # macOS only; commented for Linux compatibility
+
+# Use lld (LLVM linker) on macOS — ld64.lld is 2-5x faster than Apple ld for large Rust workspaces.
+# Requires: brew install lld@20
+# macOS Developer Tools tip: add Terminal to System Settings → Privacy & Security → Developer Tools
+# to prevent XProtect from scanning each new binary (fixes the 10-min final link step).
+[target.aarch64-apple-darwin]
+rustflags = ["-C", "link-arg=-fuse-ld=/opt/homebrew/opt/lld@20/bin/ld64.lld"]
+
+[alias]
+# Fast local build helpers
+bfast = "build --profile release-fast"
+mcp-fast = "build -p cortex-mcp --profile release-fast"
+ws-fast = "build --workspace --profile release-fast"
+ckws = "check --workspace"
+
+# App build helpers
+# NOTE: Tauri CLI `-c` only merges config; `-- --package` goes to Tauri's args, not cargo.
+# Use --manifest-path so cargo finds the correct crate, then Tauri reads tauri.conf.json
+# from the same directory as that Cargo.toml.
+tauri-daemon = "tauri build -- --manifest-path apps/cortex-daemon/Cargo.toml"
+
+# Alias kept for backward-compat (maps old tauri-sync → cortex-daemon)
+tauri-sync = "tauri build -- --manifest-path apps/cortex-daemon/Cargo.toml"
+
+# CortexDaemon dev mode (hot-reload, debug binary)
+tauri-daemon-dev = "tauri dev -- --manifest-path apps/cortex-daemon/Cargo.toml"
+
+# Legacy alias
+tauri-sync-dev = "tauri dev -- --manifest-path apps/cortex-daemon/Cargo.toml"
+
+# Build CortexStudio desktop binary (compile-only, no bundle)
+studio = "build --manifest-path apps/cortex-studio/src-tauri/Cargo.toml"
+
+# Alias kept for symmetry with sync naming
+studio-dev = "build --manifest-path apps/cortex-studio/src-tauri/Cargo.toml"

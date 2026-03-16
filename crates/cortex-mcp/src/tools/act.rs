@@ -80,19 +80,20 @@ fn act_schemas() -> Vec<Value> {
         // ── Data Graph Editor ─────────────────────────────────────────────
         json!({
             "name": "cortex_act_edit_data_graph",
-            "description": "Structural JSON and YAML edits via JSONPath-like targets. Preserves surrounding formatting/comments when possible. Use this for config mutations; for TOML rewrites use cortex_fs_manage(write).",
+            "description": "Structural JSON and YAML edits via JSONPath-like targets. Preserves surrounding formatting/comments when possible.\n\nAction semantics:\n• set    — update an existing key or INSERT a new key (upsert). JSON: works for any depth including top-level ($.newKey). YAML: only updates existing keys; to add a new key to YAML use action=replace on the parent path.\n• replace — same as set for existing keys (preferred alias when the key is known to exist).\n• delete  — remove the target key entirely.\n\nFor TOML rewrites use cortex_fs_manage(action=write) on the whole file.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "file": { "type": "string", "description": "Workspace-prefixed path (e.g. [FolderName]/path/to/file) or absolute path to the data file." },
+                    "file": { "type": "string", "description": "Workspace-prefixed path (e.g. [FolderName]/path/to/file) or absolute path to the JSON or YAML file." },
                     "edits": {
                         "type": "array",
+                        "description": "Ordered list of edits to apply.",
                         "items": {
                             "type": "object",
                             "properties": {
-                                "target": { "type": "string", "description": "JSONPath-like target (e.g. '$.key[0].nested')." },
-                                "action": { "type": "string", "enum": ["set", "delete", "replace"] },
-                                "value":  { "type": "string", "description": "New value (required for set/replace)." }
+                                "target": { "type": "string", "description": "JSONPath-like dot-notation target (e.g. '$.key', '$.section.sub', '$.array[0]'). Use '$' alone to address the root object." },
+                                "action": { "type": "string", "enum": ["set", "replace", "delete"], "description": "set/replace: write a value (set can upsert missing keys in JSON). delete: remove the key." },
+                                "value":  { "type": "string", "description": "New value as a JSON-compatible string (required for set/replace). Booleans, numbers, and objects are accepted as strings and will be coerced." }
                             },
                             "required": ["target", "action"]
                         }
@@ -157,41 +158,46 @@ fn act_schemas() -> Vec<Value> {
         // ── Synchronous Shell Exec + optional diagnostics ──────────────
         json!({
             "name": "cortex_act_shell_exec",
-            "description": "Run a bounded shell command synchronously and return its output. Use run_diagnostics=true for cargo/tsc/go compiler checks. Do not use this for long-running watch/server processes.",
+            "description": "Run a bounded shell command synchronously and return its output. Do not use this for long-running watch/server processes.\n\n• PATH is automatically augmented on Unix to include ~/.cargo/bin, ~/.local/bin, and /usr/local/bin — so cargo, node, python3, etc. are available even when launched from an IDE with a reduced PATH.\n• Use run_diagnostics=true to auto-detect the build system (cargo/tsc/go/maven/gradle) and run compiler checks without specifying the command.\n• Use problem_matcher to turn raw error output into structured JSON (supported values: 'cargo', 'tsc', 'eslint', 'go', 'python').\n• On timeout, the process is killed and the partial output is returned with a 'Timed out' prefix.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "command":         { "type": "string",  "description": "Shell command to run (required unless run_diagnostics=true)." },
-                    "cwd":             { "type": "string",  "description": "Workspace-prefixed path (e.g. [FolderName]/path/to/dir) or absolute path for the working directory (optional)." },
-                    "timeout_secs":    { "type": "integer", "description": "Hard timeout in seconds. Default 30 (60 when run_diagnostics=true).", "default": 30 },
-                    "run_diagnostics": { "type": "boolean", "description": "When true, auto-detect manifest and run the correct compiler check. Ignores command field.", "default": false },
-                    "problem_matcher": { "type": "string",  "description": "Named error extractor for failed output (e.g. 'cargo', 'tsc', 'eslint'). When set, failures return structured JSON errors instead of raw tail." }
+                    "command":         { "type": "string",  "description": "Shell command to run (required unless run_diagnostics=true). Executed via 'sh -c' on Unix and 'cmd /C' on Windows." },
+                    "cwd":             { "type": "string",  "description": "Workspace-prefixed path (e.g. [FolderName]) or absolute path for the working directory. Defaults to the primary workspace root." },
+                    "timeout_secs":    { "type": "integer", "description": "Hard kill timeout in seconds. Default 30; automatically 60 when run_diagnostics=true.", "default": 30 },
+                    "run_diagnostics": { "type": "boolean", "description": "When true, auto-detect manifest in cwd and run the correct compiler check (cargo check, tsc --noEmit, go build, etc.). Ignores the command field.", "default": false },
+                    "problem_matcher": { "type": "string",  "description": "Named error extractor. Supported: 'cargo', 'tsc', 'eslint', 'go', 'python'. Returns structured JSON errors instead of raw output on failure." }
                 }
             }
         }),
         // ── Batch Execute (Meta-Tool) ─────────────────────────────────────
         json!({
             "name": "cortex_act_batch_execute",
-            "description": "Execute multiple Cortex tool calls in one round-trip. Best for independent reads or a small edit+verify sequence. Runs sequentially, supports optional fail-fast behavior, and truncates oversized per-operation output. Example operations: [{\"tool_name\": \"cortex_act_shell_exec\", \"parameters\": {\"command\": \"cargo check\", \"cwd\": \"[ProjectA]\"}}]",
+            "description": "Execute multiple Cortex tool calls in one round-trip. Runs sequentially (not in parallel). Best for independent reads, edit+verify pairs, or any sequence of ≤10 operations.\n\n• Supports all 14 active Cortex tools as operation tool_name values.\n• Nesting cortex_act_batch_execute inside itself is NOT allowed.\n• Each operation's output is independently truncated to max_chars_per_op.\n• Results include per-operation success/failure, output, output_chars, and truncated flag.\n• Use fail_fast=true when later operations depend on earlier ones succeeding.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "fail_fast": {
-                        "type": "boolean",
-                        "description": "When true, stop after the first failing operation. Default false.",
-                        "default": false
-                    },
                     "operations": {
                         "type": "array",
-                        "description": "Ordered list of operations to execute.",
+                        "description": "Ordered list of tool operations to execute sequentially.",
                         "items": {
                             "type": "object",
                             "properties": {
-                                "tool_name":  { "type": "string", "description": "Any active Cortex tool name, e.g. 'cortex_act_edit_ast', 'cortex_code_explorer', or 'cortex_symbol_analyzer'." },
-                                "parameters": { "type": "object", "description": "Parameters for the tool." }
+                                "tool_name":  { "type": "string", "description": "Any active Cortex tool name (e.g. 'cortex_act_edit_ast', 'cortex_code_explorer', 'cortex_act_shell_exec'). Nesting 'cortex_act_batch_execute' is not allowed." },
+                                "parameters": { "type": "object", "description": "Parameters object for the tool, identical to calling the tool directly." }
                             },
                             "required": ["tool_name", "parameters"]
                         }
+                    },
+                    "fail_fast": {
+                        "type": "boolean",
+                        "description": "Stop after the first failing operation and skip the rest. Default false (all operations run regardless).",
+                        "default": false
+                    },
+                    "max_chars_per_op": {
+                        "type": "integer",
+                        "description": "Maximum output characters per operation before truncation. Default 4000. Increase for operations that return large outputs like map_overview or deep_slice.",
+                        "default": 4000
                     }
                 },
                 "required": ["operations"]
@@ -199,7 +205,7 @@ fn act_schemas() -> Vec<Value> {
         }),
         json!({
             "name": "cortex_semantic_code_search",
-            "description": "Concept-based code search over the local semantic index. Use this when you know the intent but not exact filenames or symbol names. If the index is missing or stale, prefer cortex_search_exact or cortex_code_explorer.",
+            "description": "Concept-based code search over the local semantic index. Use this when you know the intent but not the exact symbol name or filename (e.g. 'database connection pool', 'auth middleware'). If the index is missing, stale, or returns no results, fall back immediately to cortex_search_exact or cortex_code_explorer — do not assume the code does not exist.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -233,7 +239,7 @@ fn act_schemas() -> Vec<Value> {
         // ── Seamless Rebirth: MCP Worker Hot Reload ───────────────────────
         json!({
             "name": "cortex_mcp_hot_reload",
-            "description": "Restart the MCP worker to load a newly built binary. The supervisor respawns the worker on the same stdio channel; after restart, the client should re-initialize and refresh tools/list if it needs updated schema.",
+            "description": "Restart the MCP worker to pick up a newly built binary. The supervisor respawns on the same stdio channel without disconnecting the IDE.\n\nTypical workflow after rebuilding:\n1. cargo build --release -p cortex-mcp (in terminal)\n2. cortex_mcp_hot_reload (this tool)\n3. Re-initialize the MCP session if the client requires it\n4. Optionally refresh tools/list to see updated schemas",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -244,7 +250,7 @@ fn act_schemas() -> Vec<Value> {
         // ── File System God (write / patch / mkdir / delete / rename / move / copy) ──
         json!({
             "name": "cortex_fs_manage",
-            "description": "Write, patch, create, delete, rename, move, or copy files/directories. Use this for physical filesystem changes, not structural code edits. In the minimal branch it does not promise automatic semantic re-indexing.",
+            "description": "Write, patch, create, delete, rename, move, or copy files and directories. Use this for physical file operations — not for structured code edits (use cortex_act_edit_ast / cortex_act_edit_data_graph for those).\n\naction=write: create or overwrite a file with raw content. Use for TOML, plain text, or any file type not covered by a structural editor.\naction=patch: update a single key in .env, .ini, or key=value files (not JSON/YAML). Use patch_action=set to write a key, patch_action=delete to remove it.\naction=mkdir: create one or more directories (including parents).\naction=delete: remove files or directories (non-empty dirs included).\naction=rename / move / copy: paths[0]=source, paths[1]=destination.",
             "inputSchema": {
                 "type": "object",
                 "properties": {

@@ -60,6 +60,9 @@ IDE / MCP Client
 - performs AST-backed source edits and structural data/markup/SQL changes
 - runs bounded shell commands and exact/semantic search helpers
 - now resolves `[FolderName]/...` paths for edit, search, filesystem, and shell `cwd` parameters using the workspace roots passed down from `cortex-mcp`
+- shell commands execute via `sh -c` on Unix and `cmd /C` on Windows; PATH is augmented on Unix to include `~/.cargo/bin`, `~/.local/bin`, `/usr/local/bin`
+- timeout kill uses `kill -9` on Unix and `taskkill /F` on Windows
+- `cortex_act_edit_data_graph` supports full upsert (insert new keys) for JSON; YAML only supports updating existing keys
 
 ### `cortex-db`
 

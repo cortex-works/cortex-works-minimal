@@ -143,3 +143,101 @@ When editing and validating with the ACT tools only:
 - Use `cortex_search_exact` when you know the string: `TODO(hero)`, `Deprecated`, or a specific error message.
 - Use `cortex_semantic_code_search` when you have a concept: "How do we handle database migrations?" or "Where is the authentication middleware?"
 - When either search can be scoped to one root, pass `project_path="[FolderName]"`.
+- If semantic search returns no results, immediately fall back to `cortex_search_exact` or `cortex_code_explorer`. Do not assume the code does not exist.
+
+---
+
+## Data Editing: JSON vs YAML Rules
+
+`cortex_act_edit_data_graph` behaves differently for JSON and YAML:
+
+| Operation | JSON | YAML |
+|-----------|------|------|
+| Update existing key (`set`/`replace`) | ✅ | ✅ |
+| Insert a new top-level key (`set`) | ✅ (upserts) | ❌ use `replace` on parent |
+| Insert a nested key (`set`) | ✅ (upserts) | ❌ use `replace` on parent |
+| Delete a key (`delete`) | ✅ | ✅ |
+
+**Adding a new key to YAML:** use `action=replace` targeting the parent object and supply the full updated object as the value.
+
+**TOML:** not supported by `cortex_act_edit_data_graph`. Use `cortex_fs_manage(action=write)` to rewrite the whole file.
+
+### Example: Insert a new top-level key in JSON
+
+```json
+{
+  "name": "cortex_act_edit_data_graph",
+  "arguments": {
+    "file": "[config-root]/db.json",
+    "edits": [{ "target": "$.ssl", "action": "set", "value": "true" }]
+  }
+}
+```
+
+### Example: Add a new key to YAML (use replace on parent)
+
+```json
+{
+  "name": "cortex_act_edit_data_graph",
+  "arguments": {
+    "file": "[config-root]/docker-compose.yaml",
+    "edits": [{
+      "target": "$.services.app",
+      "action": "replace",
+      "value": "{\"image\": \"myapp:v2\", \"ports\": [\"8080:80\"], \"restart\": \"always\"}"
+    }]
+  }
+}
+```
+
+---
+
+## Batch Execute Patterns
+
+Use `cortex_act_batch_execute` to collapse multiple round-trips into one. It runs operations sequentially and is ideal for:
+
+- Parallel independent reads (topology + map_overview + search)
+- Edit + verify patterns (edit → run_diagnostics)
+- Explore + checkpoint + edit sequences
+
+**Rules:**
+- Do not nest `cortex_act_batch_execute` inside itself.
+- Increase `max_chars_per_op` (default 4000) when an operation returns large output (e.g. `map_overview`, `deep_slice`).
+- Use `fail_fast=true` when later operations depend on earlier ones succeeding.
+
+### Example: Explore + Edit + Verify
+
+```json
+{
+  "name": "cortex_act_batch_execute",
+  "arguments": {
+    "fail_fast": true,
+    "max_chars_per_op": 8000,
+    "operations": [
+      {
+        "tool_name": "cortex_code_explorer",
+        "parameters": { "action": "map_overview", "repoPath": "/path/to/repo", "target_dirs": ["crates/cortex-act/src/act"] }
+      },
+      {
+        "tool_name": "cortex_act_edit_ast",
+        "parameters": {
+          "file": "[cortex-act]/src/act/shell_exec.rs",
+          "edits": [{ "target": "augment_unix_path", "action": "replace", "code": "fn augment_unix_path(...) { ... }" }]
+        }
+      },
+      {
+        "tool_name": "cortex_act_shell_exec",
+        "parameters": { "run_diagnostics": true, "cwd": "/path/to/repo", "timeout_secs": 60 }
+      }
+    ]
+  }
+}
+```
+
+---
+
+## Shell Exec: PATH and Diagnostics
+
+- On Unix, `cortex_act_shell_exec` automatically prepends `~/.cargo/bin`, `~/.local/bin`, and `/usr/local/bin` to `PATH` so tools like `cargo`, `node`, and `python3` work even when launched from an IDE with a reduced PATH.
+- `run_diagnostics=true` auto-detects the build system from the `cwd` manifest and runs the appropriate compiler check. Supported: cargo, tsc (tsconfig.json), go (go.mod), Maven (pom.xml), Gradle (build.gradle).
+- The hard `timeout_secs` kill is cross-platform: `kill -9` on Unix, `taskkill /F` on Windows.

@@ -75,10 +75,19 @@ The smoke harness validates:
 
 ## VS Code Config Path
 
-Default macOS VS Code user MCP config:
-
+macOS:
 ```text
 $HOME/Library/Application Support/Code/User/mcp.json
+```
+
+Linux:
+```text
+$HOME/.config/Code/User/mcp.json
+```
+
+Windows:
+```text
+%APPDATA%\Code\User\mcp.json
 ```
 
 ## Dependency Refresh
@@ -104,3 +113,12 @@ Before shipping a release build for the minimal branch:
 2. run `cargo test -p cortex-mcp --test full_stack_smoke`
 3. confirm ACT tools still accept `[FolderName]/...` for edit, search, filesystem, and shell `cwd` parameters
 4. if schemas changed, verify `tools/list` wording stays aligned with real behavior
+5. after a rebuild, call `cortex_mcp_hot_reload` before checking updated schemas in the IDE
+
+## Cross-Platform Notes
+
+- Shell exec uses `sh -c` on Unix and `cmd /C` on Windows (handled automatically).
+- PATH is augmented on Unix to include `~/.cargo/bin`, `~/.local/bin`, `/usr/local/bin` so IDEs that launch with reduced PATH can still find cargo/node/python.
+- Timeout kill uses `kill -9 <pid>` on Unix and `taskkill /PID <pid> /F` on Windows.
+- Maven/Gradle wrappers use `.cmd`/`.bat` extensions on Windows and `./mvnw`/`./gradlew` on Unix.
+- The `permission_guard_catches_readonly` test is guarded with `#[cfg(unix)]` because `std::os::unix::fs::PermissionsExt` is not available on Windows.

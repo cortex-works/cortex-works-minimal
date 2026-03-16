@@ -19,18 +19,18 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::PathBuf;
 
-const MAX_OUTPUT_CHARS: usize = 4_000;
-const OUTPUT_TRUNCATION_SUFFIX: &str = "... [Output truncated to save tokens. Run this tool individually if you need the full output]";
+pub const DEFAULT_MAX_OUTPUT_CHARS: usize = 4_000;
+const OUTPUT_TRUNCATION_SUFFIX: &str = "... [truncated — call this tool individually for full output]";
 
-fn truncate_output(output: String) -> String {
-    if output.chars().count() <= MAX_OUTPUT_CHARS {
-        return output;
+/// Returns `(possibly-truncated output, was_truncated)`.
+fn truncate_output(output: String, max_chars: usize) -> (String, bool) {
+    if output.chars().count() <= max_chars {
+        return (output, false);
     }
-
-    let keep = MAX_OUTPUT_CHARS.saturating_sub(OUTPUT_TRUNCATION_SUFFIX.chars().count());
+    let keep = max_chars.saturating_sub(OUTPUT_TRUNCATION_SUFFIX.chars().count());
     let mut truncated: String = output.chars().take(keep).collect();
     truncated.push_str(OUTPUT_TRUNCATION_SUFFIX);
-    truncated
+    (truncated, true)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -57,6 +57,10 @@ pub struct OpResult {
     pub success: bool,
     /// Tool output (success text) or error message.
     pub output: String,
+    /// Character count of the raw output before truncation.
+    pub output_chars: usize,
+    /// `true` when the output was cut to `max_chars_per_op`.
+    pub truncated: bool,
 }
 
 /// Summary returned to the MCP caller.
@@ -80,6 +84,7 @@ pub fn execute_batch(
     workspace_roots: &[PathBuf],
     workspace_names: &[String],
     fail_fast: bool,
+    max_chars_per_op: usize,
 ) -> BatchSummary {
     let total = operations.len();
     let mut results = Vec::with_capacity(total);
@@ -87,11 +92,15 @@ pub fn execute_batch(
     for (index, op) in operations.into_iter().enumerate() {
         // Reject nested batch calls to prevent recursion.
         if op.tool_name == "cortex_act_batch_execute" {
+            let msg = "Nested cortex_act_batch_execute is not allowed".to_string();
+            let chars = msg.chars().count();
             results.push(OpResult {
                 index,
                 tool_name: op.tool_name,
                 success: false,
-                output: "Nested cortex_act_batch_execute is not allowed".to_string(),
+                output: msg,
+                output_chars: chars,
+                truncated: false,
             });
             continue;
         }
@@ -103,13 +112,17 @@ pub fn execute_batch(
             workspace_names,
         );
         let success = outcome.is_ok();
-        let output = truncate_output(outcome.unwrap_or_else(|e| e));
+        let raw = outcome.unwrap_or_else(|e| e);
+        let raw_chars = raw.chars().count();
+        let (output, truncated) = truncate_output(raw, max_chars_per_op);
 
         results.push(OpResult {
             index,
             tool_name: op.tool_name,
             success,
             output,
+            output_chars: raw_chars,
+            truncated,
         });
 
         if fail_fast && !success {

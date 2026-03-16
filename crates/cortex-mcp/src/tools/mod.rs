@@ -18,8 +18,7 @@ use serde_json::{Value, json};
 #[allow(dead_code)]
 pub fn mark_rules_read() {}
 
-const BATCH_MAX_OUTPUT_CHARS: usize = 4_000;
-const BATCH_OUTPUT_TRUNCATION_SUFFIX: &str = "... [Output truncated to save tokens. Run this tool individually if you need the full output]";
+use cortex_act::act::batch_executor::DEFAULT_MAX_OUTPUT_CHARS;
 
 // ─── Global registry ─────────────────────────────────────────────────────────
 
@@ -65,16 +64,17 @@ fn rpc_text(resp: &Value) -> String {
         .unwrap_or_else(|| serde_json::to_string(resp).unwrap_or_default())
 }
 
-fn truncate_batch_output(output: String) -> String {
-    if output.chars().count() <= BATCH_MAX_OUTPUT_CHARS {
-        return output;
+/// Returns `(possibly-truncated output, was_truncated, raw_char_count)`.
+fn truncate_batch_output(output: String, max_chars: usize) -> (String, bool, usize) {
+    let raw_chars = output.chars().count();
+    let suffix = "... [truncated — call this tool individually for full output]";
+    if raw_chars <= max_chars {
+        return (output, false, raw_chars);
     }
-
-    let keep = BATCH_MAX_OUTPUT_CHARS
-        .saturating_sub(BATCH_OUTPUT_TRUNCATION_SUFFIX.chars().count());
+    let keep = max_chars.saturating_sub(suffix.chars().count());
     let mut truncated: String = output.chars().take(keep).collect();
-    truncated.push_str(BATCH_OUTPUT_TRUNCATION_SUFFIX);
-    truncated
+    truncated.push_str(suffix);
+    (truncated, true, raw_chars)
 }
 
 fn ast_execute(ast_state: &mut ServerState, name: &str, args: &Value) -> Result<String, String> {
@@ -218,6 +218,11 @@ pub fn dispatch(ast_state: &mut ServerState, id: Value, params: &Value) -> Value
             .get("fail_fast")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
+        let max_chars = args
+            .get("max_chars_per_op")
+            .and_then(|v| v.as_u64())
+            .map(|n| n as usize)
+            .unwrap_or(DEFAULT_MAX_OUTPUT_CHARS);
         let mut operations: Vec<BatchOp> = Vec::with_capacity(ops.len());
         for op in &ops {
             let tname = op.get("tool_name").and_then(|v| v.as_str()).unwrap_or("");
@@ -234,11 +239,15 @@ pub fn dispatch(ast_state: &mut ServerState, id: Value, params: &Value) -> Value
 
         for (index, op) in operations.into_iter().enumerate() {
             if op.tool_name == "cortex_act_batch_execute" {
+                let msg = "Nested cortex_act_batch_execute is not allowed".to_string();
+                let chars = msg.chars().count();
                 results.push(OpResult {
                     index,
                     tool_name: op.tool_name,
                     success: false,
-                    output: "Nested cortex_act_batch_execute is not allowed".to_string(),
+                    output: msg,
+                    output_chars: chars,
+                    truncated: false,
                 });
                 if fail_fast {
                     break;
@@ -248,13 +257,16 @@ pub fn dispatch(ast_state: &mut ServerState, id: Value, params: &Value) -> Value
 
             let outcome = execute_tool(ast_state, &op.tool_name, &op.parameters);
             let success = outcome.is_ok();
-            let output = truncate_batch_output(outcome.unwrap_or_else(|e| e));
+            let (output, truncated, output_chars) =
+                truncate_batch_output(outcome.unwrap_or_else(|e| e), max_chars);
 
             results.push(OpResult {
                 index,
                 tool_name: op.tool_name,
                 success,
                 output,
+                output_chars,
+                truncated,
             });
 
             if fail_fast && !success {

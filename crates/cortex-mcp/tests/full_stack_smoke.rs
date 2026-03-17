@@ -469,33 +469,198 @@ fn full_tool_smoke_and_hot_reload() {
     assert_ok(&semantic, "greet");
     assert!(semantic.text.contains("src/lib.rs"));
 
-    let batch = client.call_tool(
+    let batch_contract = client.call_tool(
         "cortex_act_batch_execute",
         json!({
+            "fail_fast": true,
+            "max_chars_per_op": 120,
             "operations": [
                 {
                     "tool_name": "cortex_search_exact",
                     "parameters": {
                         "project_path": prefixed(""),
-                        "regex_pattern": "updated-by-edit-ast"
+                        "regex_pattern": "pub fn",
+                        "include_pattern": "src/**"
                     }
                 },
                 {
-                    "tool_name": "cortex_code_explorer",
+                    "tool_name": "cortex_act_batch_execute"
+                },
+                {
+                    "tool_name": "cortex_symbol_analyzer",
                     "parameters": {
-                        "action": "map_overview",
+                        "action": "read_source",
                         "repoPath": workspace,
-                        "target_dir": "."
+                        "path": lib_path,
+                        "symbol_name": "wrapper"
                     }
                 }
             ]
         }),
     );
-    assert!(!batch.is_error, "batch execute must succeed: {}", batch.text);
-    let batch_json: Value = serde_json::from_str(&batch.text).expect("parse batch JSON");
-    let results = batch_json.as_array().expect("batch result array");
-    assert_eq!(results.len(), 2, "batch should return two operation results");
-    assert!(results.iter().all(|entry| entry["ok"].as_bool().unwrap_or(false)), "all batch operations must succeed: {batch_json}");
+    let batch_contract_json = parse_batch_summary(&batch_contract);
+    assert_eq!(batch_contract_json["total"].as_u64(), Some(3));
+    assert_eq!(batch_contract_json["passed"].as_u64(), Some(1));
+    assert_eq!(batch_contract_json["failed"].as_u64(), Some(1));
+    assert_eq!(batch_contract_json["skipped"].as_u64(), Some(1));
+    let contract_results = batch_contract_json["results"].as_array().expect("batch results array");
+    assert_eq!(contract_results.len(), 2, "fail_fast should stop before the third operation runs");
+    assert!(contract_results[0]["truncated"].as_bool().unwrap_or(false), "first operation should be truncated: {batch_contract_json}");
+    assert_eq!(
+        contract_results[1]["output"].as_str(),
+        Some("Nested cortex_act_batch_execute is not allowed"),
+        "nested batch calls must be rejected with a clear error"
+    );
+
+    let full_batch = client.call_tool(
+        "cortex_act_batch_execute",
+        json!({
+            "fail_fast": true,
+            "max_chars_per_op": 8000,
+            "operations": [
+                {
+                    "tool_name": "cortex_manage_ast_languages",
+                    "parameters": {
+                        "action": "status"
+                    }
+                },
+                {
+                    "tool_name": "cortex_code_explorer",
+                    "parameters": {
+                        "action": "workspace_topology",
+                        "repoPath": workspace
+                    }
+                },
+                {
+                    "tool_name": "cortex_symbol_analyzer",
+                    "parameters": {
+                        "action": "read_source",
+                        "repoPath": workspace,
+                        "path": lib_path,
+                        "symbol_name": "greet"
+                    }
+                },
+                {
+                    "tool_name": "cortex_chronos",
+                    "parameters": {
+                        "action": "list_checkpoints",
+                        "repoPath": workspace
+                    }
+                },
+                {
+                    "tool_name": "cortex_act_edit_ast",
+                    "parameters": {
+                        "file": prefixed("src/lib.rs"),
+                        "edits": [{
+                            "target": "function:wrapper",
+                            "action": "replace",
+                            "code": "pub fn wrapper() -> &'static str {\n    \"updated-by-batch\"\n}\n"
+                        }]
+                    }
+                },
+                {
+                    "tool_name": "cortex_act_edit_data_graph",
+                    "parameters": {
+                        "file": prefixed("config/sample.json"),
+                        "edits": [{
+                            "target": "$.flag",
+                            "action": "replace",
+                            "value": "false"
+                        }]
+                    }
+                },
+                {
+                    "tool_name": "cortex_act_edit_markup",
+                    "parameters": {
+                        "file": prefixed("docs/sample.md"),
+                        "edits": [{
+                            "target": "heading:Intro",
+                            "action": "insert_after",
+                            "code": "\nBatch follow-up paragraph.\n"
+                        }]
+                    }
+                },
+                {
+                    "tool_name": "cortex_act_sql_surgery",
+                    "parameters": {
+                        "file": prefixed("db/schema.sql"),
+                        "edits": [{
+                            "target": "create_table:users",
+                            "action": "replace",
+                            "code": "CREATE TABLE users (id INT, name TEXT, email TEXT);"
+                        }]
+                    }
+                },
+                {
+                    "tool_name": "cortex_fs_manage",
+                    "parameters": {
+                        "action": "write",
+                        "paths": [prefixed("generated/batch-note.txt")],
+                        "content": "written-from-batch"
+                    }
+                },
+                {
+                    "tool_name": "cortex_act_shell_exec",
+                    "parameters": {
+                        "command": "printf batch-shell",
+                        "cwd": prefixed("")
+                    }
+                },
+                {
+                    "tool_name": "cortex_search_exact",
+                    "parameters": {
+                        "project_path": prefixed(""),
+                        "regex_pattern": "updated-by-edit-ast",
+                        "include_pattern": "src/**"
+                    }
+                },
+                {
+                    "tool_name": "cortex_semantic_code_search",
+                    "parameters": {
+                        "query": "wrapper helper",
+                        "project_path": prefixed(""),
+                        "extract_code": true,
+                        "limit": 3
+                    }
+                }
+            ]
+        }),
+    );
+    let full_batch_json = parse_batch_summary(&full_batch);
+    assert_eq!(full_batch_json["total"].as_u64(), Some(12));
+    assert_eq!(full_batch_json["passed"].as_u64(), Some(12));
+    assert_eq!(full_batch_json["failed"].as_u64(), Some(0));
+    assert_eq!(full_batch_json["skipped"].as_u64(), Some(0));
+    let full_batch_results = full_batch_json["results"].as_array().expect("full batch results array");
+    assert_eq!(full_batch_results.len(), 12);
+    assert!(full_batch_results.iter().all(|entry| entry["success"].as_bool().unwrap_or(false)), "all batched operations must succeed: {full_batch_json}");
+    let tool_names_in_batch: HashSet<String> = full_batch_results
+        .iter()
+        .filter_map(|entry| entry["tool_name"].as_str().map(str::to_string))
+        .collect();
+    let expected_batched_tools: HashSet<String> = [
+        "cortex_manage_ast_languages",
+        "cortex_code_explorer",
+        "cortex_symbol_analyzer",
+        "cortex_chronos",
+        "cortex_act_edit_ast",
+        "cortex_act_edit_data_graph",
+        "cortex_act_edit_markup",
+        "cortex_act_sql_surgery",
+        "cortex_fs_manage",
+        "cortex_act_shell_exec",
+        "cortex_search_exact",
+        "cortex_semantic_code_search",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect();
+    assert_eq!(tool_names_in_batch, expected_batched_tools, "batch should cover every non-terminal tool once");
+    assert!(fs::read_to_string(&lib_path).expect("read lib after batched edit").contains("updated-by-batch"));
+    assert!(fs::read_to_string(workspace.join("config/sample.json")).expect("read json after batched edit").contains("false"));
+    assert!(fs::read_to_string(workspace.join("docs/sample.md")).expect("read markdown after batched edit").contains("Batch follow-up paragraph."));
+    assert!(fs::read_to_string(workspace.join("db/schema.sql")).expect("read sql after batched edit").contains("email TEXT"));
+    assert_eq!(fs::read_to_string(workspace.join("generated/batch-note.txt")).expect("read batched fs output"), "written-from-batch");
 
     drop(client);
 
@@ -504,12 +669,48 @@ fn full_tool_smoke_and_hot_reload() {
         "cortex_mcp_hot_reload",
         json!({ "reason": "integration-smoke" }),
     );
-    assert_ok(&hot_reload, "Supervisor will restart");
+    assert_ok(&hot_reload, "restart with the new binary");
     thread::sleep(Duration::from_millis(1200));
-    supervisor.initialize();
+    drop(supervisor);
+
+    let mut supervisor = RpcClient::spawn(&bin, &home, &workspace, false);
     let reloaded_tools = supervisor.tools_list();
     let reloaded_set: HashSet<String> = reloaded_tools.into_iter().collect();
-    assert_eq!(reloaded_set, expected, "hot reload must restart the MCP worker with the same 14-tool surface");
+    assert_eq!(reloaded_set, expected, "hot reload must leave the rebuilt MCP worker usable with the same 14-tool surface");
+
+    let hot_reload_batch = supervisor.call_tool(
+        "cortex_act_batch_execute",
+        json!({
+            "fail_fast": true,
+            "operations": [
+                {
+                    "tool_name": "cortex_search_exact",
+                    "parameters": {
+                        "project_path": prefixed(""),
+                        "regex_pattern": "updated-by-batch",
+                        "include_pattern": "src/**"
+                    }
+                },
+                {
+                    "tool_name": "cortex_mcp_hot_reload",
+                    "parameters": { "reason": "integration-smoke-batch" }
+                }
+            ]
+        }),
+    );
+    let hot_reload_batch_json = parse_batch_summary(&hot_reload_batch);
+    assert_eq!(hot_reload_batch_json["total"].as_u64(), Some(2));
+    assert_eq!(hot_reload_batch_json["passed"].as_u64(), Some(2));
+    assert_eq!(hot_reload_batch_json["failed"].as_u64(), Some(0));
+    let hot_reload_results = hot_reload_batch_json["results"].as_array().expect("hot reload batch results");
+    assert_eq!(hot_reload_results.len(), 2);
+    assert!(
+        hot_reload_results[1]["output"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("restart with the new binary"),
+        "batched hot reload should report a restart message: {hot_reload_batch_json}"
+    );
 }
 
 fn create_fixture_workspace(workspace: &Path) {
@@ -605,4 +806,9 @@ fn path_to_uri(path: &Path) -> String {
 fn assert_ok(reply: &ToolReply, needle: &str) {
     assert!(!reply.is_error, "tool returned error: {}", reply.text);
     assert!(reply.text.contains(needle), "expected `{needle}` in tool output, got: {}", reply.text);
+}
+
+fn parse_batch_summary(reply: &ToolReply) -> Value {
+    assert!(!reply.is_error, "batch tool returned error: {}", reply.text);
+    serde_json::from_str(&reply.text).expect("parse batch summary JSON")
 }

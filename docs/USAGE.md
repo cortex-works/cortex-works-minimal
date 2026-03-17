@@ -196,14 +196,20 @@ When editing and validating with the ACT tools only:
 
 Use `cortex_act_batch_execute` to collapse multiple round-trips into one. It runs operations sequentially and is ideal for:
 
-- Parallel independent reads (topology + map_overview + search)
+- Several independent reads in one round-trip (topology + map_overview + search)
 - Edit + verify patterns (edit → run_diagnostics)
 - Explore + checkpoint + edit sequences
 
 **Rules:**
 - Do not nest `cortex_act_batch_execute` inside itself.
+- If you include `cortex_mcp_hot_reload`, make it the last operation because it restarts the worker.
 - Increase `max_chars_per_op` (default 4000) when an operation returns large output (e.g. `map_overview`, `deep_slice`).
 - Use `fail_fast=true` when later operations depend on earlier ones succeeding.
+- `parameters` is optional per operation; omitted parameters default to `{}`.
+
+**Response shape:** the tool returns a JSON object with:
+- `total`, `passed`, `failed`, `skipped`
+- `results[]`, where each item has `index`, `tool_name`, `success`, `output`, `output_chars`, and `truncated`
 
 ### Example: Explore + Edit + Verify
 
@@ -231,6 +237,27 @@ Use `cortex_act_batch_execute` to collapse multiple round-trips into one. It run
       }
     ]
   }
+}
+```
+
+Typical response:
+
+```json
+{
+  "total": 3,
+  "passed": 3,
+  "failed": 0,
+  "skipped": 0,
+  "results": [
+    {
+      "index": 0,
+      "tool_name": "cortex_code_explorer",
+      "success": true,
+      "output": "# WORKSPACE_TOPOLOGY ...",
+      "output_chars": 282,
+      "truncated": false
+    }
+  ]
 }
 ```
 

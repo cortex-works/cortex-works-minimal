@@ -131,11 +131,6 @@ pub fn resolve_path_string(workspace_roots: &[PathBuf], raw: &str) -> String {
         .into_owned()
 }
 
-#[allow(dead_code)]
-pub fn alias_for_workspace_root(root: &Path) -> String {
-    alias_for_root(root)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

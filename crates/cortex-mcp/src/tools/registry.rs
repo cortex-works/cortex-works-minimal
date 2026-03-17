@@ -1,8 +1,8 @@
 //! Unified tool registry entry type for `cortex-mcp`.
 //!
-//! Every tool in the MCP surface is represented as a single [`CortexTool`]
-//! struct that bundles its name, MCP input schema, execution handler, and
-//! gate-control flags together.
+//! Every explicitly registered tool in the MCP surface is represented as a
+//! single [`CortexTool`] struct that bundles its name, MCP input schema, and
+//! execution handler together.
 //!
 //! # Design
 //! Tools are registered once at startup in [`super::build_registry`] into a
@@ -10,19 +10,13 @@
 //! `TOOL_NAMES: &[&str]` const arrays that previously lived in `act.rs`,
 //! plus a variety of hidden compatibility shims.
 //!
-//! ## Handler variants
-//! * [`ToolHandler::Sync`] — stateless, synchronous function pointer.  Used
-//!   by cortex-act and other in-process tools.
-//! * [`ToolHandler::Ast`]  — requires mutable `ServerState`; routed to
-//!   `cortexast::server::ServerState::tool_call` in the dispatch layer.
-//!   AST tools are not stored in the registry when their schema is served
-//!   dynamically by `ServerState::tool_list`.
+//! AST tools are not stored in this registry. Their schema is served
+//! dynamically by `ServerState::tool_list`, and `tools/call` falls back to the
+//! AST dispatcher when a name is not found here.
 
 use std::path::PathBuf;
 
 use serde_json::Value;
-
-// ─── Handler ─────────────────────────────────────────────────────────────────
 
 /// Signature for a stateless, synchronous tool handler.
 ///
@@ -40,15 +34,6 @@ pub type SyncFn = fn(
     workspace_names: &[String],
 ) -> Result<String, String>;
 
-/// How a tool's `tools/call` request is dispatched at runtime.
-#[allow(dead_code)]
-pub enum ToolHandler {
-    Sync(SyncFn),
-    Ast,
-}
-
-
-
 // ─── Registry entry ──────────────────────────────────────────────────────────
 
 /// A single unified tool registry entry.
@@ -57,7 +42,6 @@ pub enum ToolHandler {
 /// (`HashMap<String, CortexTool>`).  Both schema export (`tools/list`) and
 /// request dispatch (`tools/call`) operate purely against this map, with no
 /// supplementary `TOOL_NAMES` arrays.
-#[allow(dead_code)]
 pub struct CortexTool {
     /// Exact string tool name as it appears in MCP `tools/call` requests.
     pub name: String,
@@ -69,11 +53,5 @@ pub struct CortexTool {
     pub schema: Value,
 
     /// Describes how to execute this tool.
-    pub handler: ToolHandler,
-
-    /// Reserved for branches that implement a separate rule-reading flow.
-    pub is_rules_reader: bool,
-
-    /// Reserved for branches that implement a mutation gate.
-    pub is_mutation: bool,
+    pub handler: SyncFn,
 }

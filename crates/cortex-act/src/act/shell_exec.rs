@@ -397,6 +397,7 @@ pub fn run_sync(command: &str, cwd: Option<&str>, timeout_secs: u64) -> Result<S
 
 #[cfg(test)]
 mod tests {
+    #[cfg(windows)]
     use super::*;
 
     #[cfg(windows)]

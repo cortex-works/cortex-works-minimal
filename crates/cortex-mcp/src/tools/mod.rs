@@ -12,13 +12,10 @@ use std::collections::HashMap;
 use std::sync::OnceLock;
 
 use cortexast::server::ServerState;
-use registry::{CortexTool, ToolHandler};
+use registry::CortexTool;
 use serde_json::{Value, json};
 
-#[allow(dead_code)]
-pub fn mark_rules_read() {}
-
-use cortex_act::act::batch_executor::DEFAULT_MAX_OUTPUT_CHARS;
+use cortex_act::act::batch_executor::{DEFAULT_MAX_OUTPUT_CHARS, execute_batch_with};
 
 // ─── Global registry ─────────────────────────────────────────────────────────
 
@@ -62,19 +59,6 @@ fn rpc_text(resp: &Value) -> String {
                 .map(ToOwned::to_owned)
         })
         .unwrap_or_else(|| serde_json::to_string(resp).unwrap_or_default())
-}
-
-/// Returns `(possibly-truncated output, was_truncated, raw_char_count)`.
-fn truncate_batch_output(output: String, max_chars: usize) -> (String, bool, usize) {
-    let raw_chars = output.chars().count();
-    let suffix = "... [truncated — call this tool individually for full output]";
-    if raw_chars <= max_chars {
-        return (output, false, raw_chars);
-    }
-    let keep = max_chars.saturating_sub(suffix.chars().count());
-    let mut truncated: String = output.chars().take(keep).collect();
-    truncated.push_str(suffix);
-    (truncated, true, raw_chars)
 }
 
 fn ast_execute(ast_state: &mut ServerState, name: &str, args: &Value) -> Result<String, String> {
@@ -169,15 +153,12 @@ pub fn execute_tool(
     let (registry, _) = get_registry();
 
     if let Some(tool) = registry.get(name) {
-        return match &tool.handler {
-            ToolHandler::Sync(f) => f(
-                name,
-                args,
-                ast_state.workspace_roots(),
-                ast_state.workspace_root_names(),
-            ),
-            ToolHandler::Ast    => ast_execute(ast_state, name, args),
-        };
+        return (tool.handler)(
+            name,
+            args,
+            ast_state.workspace_roots(),
+            ast_state.workspace_root_names(),
+        );
     }
 
     // AST tool fallthrough — any unregistered name goes to cortex-ast.
@@ -201,7 +182,7 @@ pub fn dispatch(ast_state: &mut ServerState, id: Value, params: &Value) -> Value
 
     // ── cortex_act_batch_execute ──────────────────────────────────────────
     if name == "cortex_act_batch_execute" {
-        use cortex_act::act::batch_executor::{BatchOp, BatchSummary, OpResult};
+        use cortex_act::act::batch_executor::BatchOp;
 
         let id2 = id.clone();
         let ok = move |t: String| {
@@ -234,56 +215,9 @@ pub fn dispatch(ast_state: &mut ServerState, id: Value, params: &Value) -> Value
                 parameters: op.get("parameters").cloned().unwrap_or_else(|| json!({})),
             });
         }
-        let total = operations.len();
-        let mut results = Vec::with_capacity(total);
-
-        for (index, op) in operations.into_iter().enumerate() {
-            if op.tool_name == "cortex_act_batch_execute" {
-                let msg = "Nested cortex_act_batch_execute is not allowed".to_string();
-                let chars = msg.chars().count();
-                results.push(OpResult {
-                    index,
-                    tool_name: op.tool_name,
-                    success: false,
-                    output: msg,
-                    output_chars: chars,
-                    truncated: false,
-                });
-                if fail_fast {
-                    break;
-                }
-                continue;
-            }
-
-            let outcome = execute_tool(ast_state, &op.tool_name, &op.parameters);
-            let success = outcome.is_ok();
-            let (output, truncated, output_chars) =
-                truncate_batch_output(outcome.unwrap_or_else(|e| e), max_chars);
-
-            results.push(OpResult {
-                index,
-                tool_name: op.tool_name,
-                success,
-                output,
-                output_chars,
-                truncated,
-            });
-
-            if fail_fast && !success {
-                break;
-            }
-        }
-
-        let passed = results.iter().filter(|result| result.success).count();
-        let failed = results.iter().filter(|result| !result.success).count();
-        let skipped = total - results.len();
-        let summary = BatchSummary {
-            total,
-            passed,
-            failed,
-            skipped,
-            results,
-        };
+        let summary = execute_batch_with(operations, fail_fast, max_chars, |tool_name, parameters| {
+            execute_tool(ast_state, tool_name, parameters)
+        });
         return ok(serde_json::to_string(&summary).unwrap_or_default());
     }
 

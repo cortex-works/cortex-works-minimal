@@ -22,15 +22,16 @@ use std::path::PathBuf;
 pub const DEFAULT_MAX_OUTPUT_CHARS: usize = 4_000;
 const OUTPUT_TRUNCATION_SUFFIX: &str = "... [truncated — call this tool individually for full output]";
 
-/// Returns `(possibly-truncated output, was_truncated)`.
-fn truncate_output(output: String, max_chars: usize) -> (String, bool) {
-    if output.chars().count() <= max_chars {
-        return (output, false);
+/// Returns `(possibly-truncated output, was_truncated, raw_char_count)`.
+pub fn summarize_output(output: String, max_chars: usize) -> (String, bool, usize) {
+    let raw_chars = output.chars().count();
+    if raw_chars <= max_chars {
+        return (output, false, raw_chars);
     }
     let keep = max_chars.saturating_sub(OUTPUT_TRUNCATION_SUFFIX.chars().count());
     let mut truncated: String = output.chars().take(keep).collect();
     truncated.push_str(OUTPUT_TRUNCATION_SUFFIX);
-    (truncated, true)
+    (truncated, true, raw_chars)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -78,14 +79,17 @@ pub struct BatchSummary {
 // Public API
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Execute all operations sequentially. Never panics; always returns a summary.
-pub fn execute_batch(
+/// Shared batch loop used by both the standalone act dispatcher and the MCP
+/// gateway so behavior cannot drift between the two entry points.
+pub fn execute_batch_with<F>(
     operations: Vec<BatchOp>,
-    workspace_roots: &[PathBuf],
-    workspace_names: &[String],
     fail_fast: bool,
     max_chars_per_op: usize,
-) -> BatchSummary {
+    mut execute: F,
+) -> BatchSummary
+where
+    F: FnMut(&str, &Value) -> Result<String, String>,
+{
     let total = operations.len();
     let mut results = Vec::with_capacity(total);
 
@@ -102,19 +106,16 @@ pub fn execute_batch(
                 output_chars: chars,
                 truncated: false,
             });
+            if fail_fast {
+                break;
+            }
             continue;
         }
 
-        let outcome = crate::act::dispatch::execute_single(
-            &op.tool_name,
-            &op.parameters,
-            workspace_roots,
-            workspace_names,
-        );
+        let outcome = execute(&op.tool_name, &op.parameters);
         let success = outcome.is_ok();
         let raw = outcome.unwrap_or_else(|e| e);
-        let raw_chars = raw.chars().count();
-        let (output, truncated) = truncate_output(raw, max_chars_per_op);
+        let (output, truncated, raw_chars) = summarize_output(raw, max_chars_per_op);
 
         results.push(OpResult {
             index,
@@ -140,5 +141,78 @@ pub fn execute_batch(
         failed,
         skipped,
         results,
+    }
+}
+
+/// Execute all operations sequentially. Never panics; always returns a summary.
+pub fn execute_batch(
+    operations: Vec<BatchOp>,
+    workspace_roots: &[PathBuf],
+    workspace_names: &[String],
+    fail_fast: bool,
+    max_chars_per_op: usize,
+) -> BatchSummary {
+    execute_batch_with(
+        operations,
+        fail_fast,
+        max_chars_per_op,
+        |tool_name, parameters| {
+            crate::act::dispatch::execute_single(
+                tool_name,
+                parameters,
+                workspace_roots,
+                workspace_names,
+            )
+        },
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn nested_batch_respects_fail_fast() {
+        let summary = execute_batch_with(
+            vec![
+                BatchOp {
+                    tool_name: "cortex_act_batch_execute".to_string(),
+                    parameters: json!({}),
+                },
+                BatchOp {
+                    tool_name: "cortex_search_exact".to_string(),
+                    parameters: json!({}),
+                },
+            ],
+            true,
+            DEFAULT_MAX_OUTPUT_CHARS,
+            |_, _| Ok("should not run".to_string()),
+        );
+
+        assert_eq!(summary.total, 2);
+        assert_eq!(summary.passed, 0);
+        assert_eq!(summary.failed, 1);
+        assert_eq!(summary.skipped, 1);
+        assert_eq!(summary.results.len(), 1);
+        assert_eq!(summary.results[0].output, "Nested cortex_act_batch_execute is not allowed");
+    }
+
+    #[test]
+    fn truncation_preserves_raw_char_count() {
+        let summary = execute_batch_with(
+            vec![BatchOp {
+                tool_name: "cortex_search_exact".to_string(),
+                parameters: json!({}),
+            }],
+            false,
+            16,
+            |_, _| Ok("abcdefghijklmnopqrstuvwxyz".to_string()),
+        );
+
+        assert_eq!(summary.results.len(), 1);
+        assert!(summary.results[0].truncated);
+        assert_eq!(summary.results[0].output_chars, 26);
+        assert!(summary.results[0].output.ends_with("call this tool individually for full output]"));
     }
 }

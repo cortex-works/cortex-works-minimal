@@ -1,58 +1,51 @@
 # cortex-works (minimal)
 
-Lean MCP server for AI IDEs. The minimal branch keeps the runtime focused on one Rust binary, `cortex-mcp`, backed by AST intelligence, multi-root path routing, and surgical code-edit tools.
+The smallest useful Cortex runtime for coding agents.
 
-## Why Minimal
+`cortex-works-minimal` gives AI IDEs a tight 14-tool MCP surface for repo mapping, symbol analysis, structural edits, semantic search, filesystem work, and controlled shell execution, all behind one Rust binary: `cortex-mcp`.
 
-This branch is optimized for agent workflows inside editors such as VS Code, Cursor, and Windsurf:
+Small enough to reason about. Sharp enough to trust.
 
-- direct MCP transport with no extra middleware in the hot path
-- progressive disclosure for large or multi-root workspaces
-- structural edits that avoid brittle line-number or regex workflows
-- a compact 14-tool public surface that is easier to reason about and document
+## Why It Feels Better In Agents
 
-The repository may still contain legacy or auxiliary folders, but the supported MCP runtime in this branch is centered on four crates: `cortex-mcp`, `cortex-ast`, `cortex-act`, and `cortex-db`.
+- One binary, one public tool surface, no proxy maze in the middle.
+- Structure-aware edits beat brittle line-number patches.
+- Multi-root path routing is built in, so agents can work across workspace folders without inventing path conventions.
+- Progressive disclosure keeps large repos navigable: topology first, focused slices second, exact source last.
+- Batch execution reduces chat round-trips without pretending operations are parallel.
 
-## Key Capabilities
+This branch intentionally centers on four crates only: `cortex-mcp`, `cortex-ast`, `cortex-act`, and `cortex-db`.
 
-- Multi-root native: both AST and ACT tools understand `[FolderName]/path/to/file` and resolve it against workspace roots captured from MCP `initialize`.
-- Progressive workspace disclosure: start with `workspace_topology`, then narrow to `target_dirs=[...]` or `only_dirs=[...]` before reading full source bodies.
-- Surgical edits: mutate Rust, TypeScript, Python, JSON, YAML, Markdown, HTML, XML, and SQL with structure-aware tools instead of blind text replacement.
-- Chronos checkpoints: save and compare AST-aware snapshots before and after refactors.
-- Search in two modes: semantic lookup for intent, exact regex search for literal strings, identifiers, and error messages.
-- Single-binary deployment: build `cortex-mcp`, point your IDE at it, and the whole tool surface is available over STDIO.
+## What You Get
+
+- Repo intelligence: topology, maps, deep slices, symbol lookups, usage search, blast radius, and AST-aware checkpoints.
+- Structural mutations: Rust, TypeScript, Python, JSON, YAML, Markdown, HTML, XML, SQL, and filesystem operations.
+- Search in two modes: semantic search for intent and exact search for literals, identifiers, and regexes.
+- Bounded execution: short shell commands and manifest-aware diagnostics without turning the tool into a long-running terminal.
+- One-round-trip workflows: batch several tool calls into a single sequential `BatchSummary` result.
+
+## Tool Chooser
+
+- Start with `cortex_code_explorer` when the repo is unfamiliar.
+- Use `cortex_symbol_analyzer` when you already know the symbol.
+- Save a `cortex_chronos` checkpoint before risky refactors.
+- Pick `cortex_act_edit_ast` for Rust/TS/Python symbol edits.
+- Pick `cortex_act_edit_data_graph` for JSON or YAML keys.
+- Pick `cortex_act_edit_markup` for headings, tags, ids, and sections.
+- Pick `cortex_act_sql_surgery` for DDL statements.
+- Pick `cortex_fs_manage` for raw files, folders, copy/move/delete, and `.env`/`.ini` patching.
+- Pick `cortex_search_exact` when you know the string or regex.
+- Pick `cortex_semantic_code_search` when you know the idea but not the name.
+- Pick `cortex_act_shell_exec` for short commands and diagnostics only.
+- Pick `cortex_act_batch_execute` for short sequential workflows such as explore → edit → verify.
+- Pick `cortex_mcp_hot_reload` only after rebuilding, and make it the final batch operation if you batch it at all.
 
 ## Runtime Layout
 
-- `cortex-mcp`: MCP gateway and tool registry.
-- `cortex-ast`: workspace discovery, symbol analysis, slicing, checkpoints, grammar loading.
-- `cortex-act`: edits, filesystem operations, exact search, semantic search, shell execution.
-- `cortex-db`: local SQLite and LanceDB helpers for semantic indexing and persistence.
-
-## Active Tool Surface
-
-### Intelligence
-
-- `cortex_code_explorer`
-- `cortex_symbol_analyzer`
-- `cortex_chronos`
-- `cortex_manage_ast_languages`
-
-### Edits and Mutations
-
-- `cortex_act_edit_ast`
-- `cortex_act_edit_data_graph`
-- `cortex_act_edit_markup`
-- `cortex_act_sql_surgery`
-- `cortex_fs_manage`
-
-### Search, Execution, and Runtime Control
-
-- `cortex_act_shell_exec`
-- `cortex_act_batch_execute`
-- `cortex_semantic_code_search`
-- `cortex_search_exact`
-- `cortex_mcp_hot_reload`
+- `cortex-mcp`: MCP gateway, schema surface, dispatcher.
+- `cortex-ast`: topology, slices, symbol analysis, checkpoints, grammar loading.
+- `cortex-act`: structural edits, filesystem ops, exact search, semantic search, shell execution, batching.
+- `cortex-db`: local SQLite and LanceDB support for persistence and indexing.
 
 ## Quick Start
 
@@ -64,12 +57,23 @@ cargo build --release -p cortex-mcp
 ./target/release/cortex-mcp
 ```
 
+## Recommended Flow
+
+```text
+1. cortex_code_explorer(workspace_topology)
+2. cortex_code_explorer(map_overview)
+3. cortex_symbol_analyzer(read_source)
+4. cortex_chronos(save_checkpoint)
+5. edit with the narrowest structural tool
+6. cortex_act_shell_exec(run_diagnostics=true)
+```
+
 ## Documentation
 
-- [docs/ARCH.md](docs/ARCH.md) — minimal-branch architecture and request flow
-- [docs/USAGE.md](docs/USAGE.md) — agent workflow, multi-root patterns, and examples
-- [docs/DEVELOPING.md](docs/DEVELOPING.md) — build, validation, and release checks
+- [docs/ARCH.md](docs/ARCH.md) explains the minimal architecture and request flow.
+- [docs/USAGE.md](docs/USAGE.md) shows agent workflows, batch patterns, and multi-root examples.
+- [docs/DEVELOPING.md](docs/DEVELOPING.md) covers build, validation, and release checks.
 
 ## GitHub About
 
-Lean MCP server for AI IDEs (Cursor, VS Code). Delivers high-performance AST intelligence, multi-root workspace support, and surgical code editing in pure Rust.
+Lean MCP server for AI IDEs with AST intelligence, structural editing, multi-root path routing, and a disciplined 14-tool surface in pure Rust.

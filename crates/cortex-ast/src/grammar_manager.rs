@@ -11,10 +11,158 @@
 //! Prune queries are embedded in the binary and copied into the cache dir on startup.
 
 use anyhow::{Context, Result};
+use serde_json::{Value, json};
 use std::path::PathBuf;
 
 /// The three statically-compiled language names. They never need downloading.
 pub const CORE_LANGUAGES: &[&str] = &["rust", "typescript", "python"];
+pub const DOWNLOADABLE_LANGUAGES: &[&str] = &["go", "php", "ruby", "java", "c", "cpp", "c_sharp", "dart"];
+
+pub fn tool_schema() -> Value {
+    let available = DOWNLOADABLE_LANGUAGES.join(", ");
+    let description = format!(
+        "Download and hot-reload extra Tree-sitter Wasm grammars from GitHub releases. Core languages are built in; use this only when a non-core parser is missing. Call action=status first to see what is already active, then action=add only for the missing parser. Returns machine-readable JSON text. Available to download: {available}."
+    );
+
+    json!({
+        "name": "cortex_manage_ast_languages",
+        "description": description,
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["status", "add"],
+                    "description": "status: list currently active, core, and downloadable languages. add: download and hot-reload one or more missing parsers; returns an error result when any requested language fails."
+                },
+                "languages": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Language names to install for action=add (e.g. ['go','php','cpp']). Core languages are already built in and do not need downloading."
+                },
+                "repoPath": {
+                    "type": "string",
+                    "description": "Optional absolute repo root whose cached semantic index should be invalidated after new parsers are added. Use this when you plan to re-run semantic or AST-heavy tools on a specific repo right after installing a parser."
+                },
+                "target_project": {
+                    "type": "string",
+                    "description": "Optional tracked project path override used instead of repoPath when invalidating cached semantic records for a project already tracked in Cortex DB."
+                }
+            },
+            "required": ["action"]
+        }
+    })
+}
+
+pub fn handle_tool_call(
+    args: &Value,
+    repo_root: Option<&std::path::Path>,
+    workspace_roots: &[PathBuf],
+) -> std::result::Result<String, String> {
+    let action = args
+        .get("action")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim();
+
+    match action {
+        "status" => Ok(serde_json::to_string(&json!({
+            "status": "ok",
+            "active": crate::inspector::exported_language_config()
+                .read()
+                .map_err(|_| "language config lock poisoned".to_string())?
+                .active_languages(),
+            "available_to_download": DOWNLOADABLE_LANGUAGES,
+            "core_languages": CORE_LANGUAGES,
+        }))
+        .unwrap_or_default()),
+        "add" => add_languages(args, repo_root, workspace_roots),
+        _ => Err("Invalid action. Must be 'status' or 'add'.".to_string()),
+    }
+}
+
+fn add_languages(
+    args: &Value,
+    repo_root: Option<&std::path::Path>,
+    workspace_roots: &[PathBuf],
+) -> std::result::Result<String, String> {
+    let requested = args
+        .get("languages")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| "No languages provided for 'add' action".to_string())?;
+
+    let mut loaded_langs = Vec::new();
+    let mut failed_langs = Vec::new();
+    let mut exts_to_invalidate = Vec::new();
+
+    {
+        let mut cfg = crate::inspector::exported_language_config()
+            .write()
+            .map_err(|_| "language config lock poisoned".to_string())?;
+        for item in requested {
+            let Some(lang) = item.as_str() else { continue };
+
+            if cfg.active_languages().contains(&lang.to_string()) {
+                loaded_langs.push(lang.to_string());
+                continue;
+            }
+
+            match cfg.add_wasm_driver(lang) {
+                Ok(_) => {
+                    loaded_langs.push(lang.to_string());
+                    exts_to_invalidate.extend(cfg.extensions_for_language(lang));
+                }
+                Err(e) => {
+                    eprintln!("Failed to add wasm driver for {}: {}", lang, e);
+                    failed_langs.push(json!({
+                        "language": lang,
+                        "error": e.to_string(),
+                    }));
+                }
+            }
+        }
+    }
+
+    let repo_root = repo_root
+        .map(std::path::Path::to_path_buf)
+        .or_else(|| workspace_roots.first().cloned())
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_else(|| PathBuf::from("."));
+
+    let mut invalidated = 0;
+    if !exts_to_invalidate.is_empty() {
+        let db_dir = crate::config::central_cache_dir(workspace_roots)
+            .unwrap_or_else(|| repo_root.join(".cortexast"))
+            .join("db");
+        if db_dir.exists() {
+            if let Ok(mut index) = crate::vector_store::CodebaseIndex::open(
+                &repo_root,
+                &db_dir,
+                "nomic-embed-text",
+                60,
+            ) {
+                let refs: Vec<&str> = exts_to_invalidate.iter().map(|s| s.as_str()).collect();
+                invalidated = index.invalidate_extensions(&refs);
+            }
+        }
+    }
+
+    let payload = json!({
+        "status": if failed_langs.is_empty() { "ok" } else { "partial_failure" },
+        "loaded_languages": loaded_langs,
+        "failed_languages": failed_langs,
+        "invalidated_records": invalidated,
+        "invalidated_extensions": exts_to_invalidate,
+        "repo_root": repo_root,
+    });
+
+    let text = serde_json::to_string(&payload).unwrap_or_default();
+    if payload["failed_languages"].as_array().map(|arr| arr.is_empty()).unwrap_or(true) {
+        Ok(text)
+    } else {
+        Err(text)
+    }
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Cache directory helpers
@@ -173,5 +321,66 @@ pub fn bootstrap_embedded_queries() {
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn tool_schema_uses_shared_language_catalog() {
+        let schema = tool_schema();
+        let description = schema["description"].as_str().expect("description");
+
+        for lang in DOWNLOADABLE_LANGUAGES {
+            assert!(description.contains(lang), "description should list {lang}: {description}");
+        }
+
+        let action_enum = schema["inputSchema"]["properties"]["action"]["enum"]
+            .as_array()
+            .expect("action enum");
+        assert_eq!(action_enum.len(), 2);
+        assert!(action_enum.iter().any(|item| item == "status"));
+        assert!(action_enum.iter().any(|item| item == "add"));
+    }
+
+    #[test]
+    fn status_returns_structured_json() {
+        let reply = handle_tool_call(&json!({ "action": "status" }), None, &[])
+            .expect("status should succeed");
+        let payload: Value = serde_json::from_str(&reply).expect("status payload json");
+
+        assert_eq!(payload["status"], "ok");
+        assert!(payload["active"].as_array().is_some());
+        assert_eq!(payload["core_languages"].as_array().map(|v| v.len()), Some(CORE_LANGUAGES.len()));
+        assert_eq!(
+            payload["available_to_download"].as_array().map(|v| v.len()),
+            Some(DOWNLOADABLE_LANGUAGES.len())
+        );
+    }
+
+    #[test]
+    fn add_requires_languages_array() {
+        let err = handle_tool_call(&json!({ "action": "add" }), None, &[])
+            .expect_err("missing languages should fail");
+        assert!(err.contains("No languages provided"));
+    }
+
+    #[test]
+    fn add_core_language_succeeds_without_network() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let reply = handle_tool_call(
+            &json!({ "action": "add", "languages": ["rust"] }),
+            Some(temp.path()),
+            &[],
+        )
+        .expect("core language add should succeed");
+        let payload: Value = serde_json::from_str(&reply).expect("add payload json");
+
+        assert_eq!(payload["status"], "ok");
+        assert!(payload["loaded_languages"].to_string().contains("rust"));
+        assert_eq!(payload["failed_languages"].as_array().map(|v| v.len()), Some(0));
     }
 }

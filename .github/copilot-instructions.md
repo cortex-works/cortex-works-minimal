@@ -10,6 +10,12 @@ crates/
   cortex-mcp/    # Single MCP gateway binary exposed to the IDE
 ```
 
+AST tool schema source of truth:
+
+- `crates/cortex-ast/src/tool_schemas.rs` — `cortex_code_explorer`, `cortex_symbol_analyzer`, `cortex_chronos`
+- `crates/cortex-ast/src/grammar_manager.rs` — `cortex_manage_ast_languages`
+- `crates/cortex-ast/src/server.rs` — runtime dispatch only; do not duplicate public schema text there
+
 The active runtime surface for this branch is intentionally minimal.
 
 - Focus on `cortex-mcp`, `cortex-ast`, `cortex-act`, and `cortex-db`
@@ -42,7 +48,7 @@ The active runtime surface for this branch is intentionally minimal.
 | Search by exact string, regex, path clue, or identifier | `cortex_search_exact` |
 | Create / copy / move / delete files and folders | `cortex_fs_manage` |
 | Patch `.env`, `.ini`, or `key=value` files | `cortex_fs_manage(action=patch)` |
-| Install non-core parsers | `cortex_manage_ast_languages` |
+| Check or install non-core parsers | `cortex_manage_ast_languages` |
 | Restart the rebuilt MCP worker | `cortex_mcp_hot_reload` |
 
 ## Path Rules
@@ -80,6 +86,16 @@ The active runtime surface for this branch is intentionally minimal.
 - Use `fail_fast=true` when later operations depend on earlier ones.
 - Raise `max_chars_per_op` for high-volume tools such as `map_overview` or `deep_slice`.
 
+## Situation Guide
+
+- If a language is already supported and you need code or symbols now, do not call `cortex_manage_ast_languages`; go straight to `cortex_code_explorer`, `cortex_symbol_analyzer`, or search.
+- If a repo contains a non-core language and AST-aware tools are missing coverage, call `cortex_manage_ast_languages(action=status)` first, then `action=add` only for the missing parser.
+- If you just added a parser and plan to re-run semantic or AST-heavy tools on one repo, pass `repoPath` so cached semantic records for that repo can be invalidated immediately.
+- If you know the exact symbol, prefer `cortex_symbol_analyzer` over `cortex_code_explorer`.
+- If you know the exact string or regex, prefer `cortex_search_exact` over `cortex_semantic_code_search`.
+- If you need a physical file operation, prefer `cortex_fs_manage`; do not use structural editors for raw file creation, copies, or deletes.
+- If you need a short command or diagnostics, use `cortex_act_shell_exec`; do not use it for watch mode or dev servers.
+
 ## Best-Practice Workflow
 
 ```
@@ -114,6 +130,8 @@ The active runtime surface for this branch is intentionally minimal.
   - `problem_matcher` values: `cargo`, `tsc`, `eslint`, `go`, `python`.
 - `cortex_act_batch_execute` can mix all 14 Cortex tools in one round-trip, but `cortex_mcp_hot_reload` should only appear as the last operation.
 - `cortex_manage_ast_languages(action=add)` downloads Wasm grammars from GitHub tree-sitter releases into `~/.cortex-works/grammars/` and hot-reloads them.
+- `cortex_manage_ast_languages(action=status)` should usually be called before `action=add` so the agent does not re-install parsers that are already active.
+- `cortex_manage_ast_languages(action=add)` returns structured JSON text and surfaces partial failures as an error result. Pass `repoPath` when you want semantic cache invalidation scoped to one repo.
 - `cortex_mcp_hot_reload` restarts the worker through the supervisor on the same stdio channel. After restart, re-run `initialize` and refresh `tools/list` if the client needs updated schema.
 - Do not reference removed services, removed tools, or old boot-order requirements in this branch.
 
@@ -147,4 +165,5 @@ cargo run --release -p cortex-mcp
 - If a non-core language parser is missing, call `cortex_manage_ast_languages` instead of guessing parser support.
 - **Data editing:** JSON supports full upsert (new keys at any depth via `set`). YAML only supports updating existing keys — use `replace` on the parent object to add new keys to YAML.
 - **Batch:** `cortex_act_batch_execute` accepts all 14 tool names, returns a `BatchSummary`, and supports omitted `parameters`. Nesting is not allowed. Put `cortex_mcp_hot_reload` last.
+- **Reload after rebuild:** if a just-built tool still behaves like the old code, run `cortex_mcp_hot_reload` before trusting the runtime result. Source changes and live MCP behavior can drift until the worker is reloaded.
 - **Shell PATH:** on Unix the tool automatically adds `~/.cargo/bin`, `~/.local/bin`, `/usr/local/bin` to PATH. `cargo`, `node`, `python3` are available without manual PATH manipulation.

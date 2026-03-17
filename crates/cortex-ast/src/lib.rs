@@ -16,6 +16,7 @@ pub mod inspector;
 pub mod mapper;
 pub mod scanner;
 pub mod skeleton;
+pub mod tool_schemas;
 pub mod server;
 pub mod slicer;
 pub mod universal;

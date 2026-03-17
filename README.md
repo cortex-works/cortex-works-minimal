@@ -4,6 +4,8 @@
 
 `cortex-works-minimal` is a lean MCP server for AI-powered IDEs. It replaces slow, token-hungry IDE tooling with a disciplined surface of 14 surgical tools — covering repo mapping, symbol analysis, structural editing, semantic search, filesystem work, and bounded shell execution.
 
+✅ **Cross-platform tested:** macOS, Windows, and Ubuntu (other Linux distros may work too).
+
 ```bash
 cargo build --release -p cortex-mcp
 ./target/release/cortex-mcp   # wire to your IDE via MCP stdio

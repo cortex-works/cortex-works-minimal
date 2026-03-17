@@ -6,18 +6,6 @@
 //!
 pub mod act;
 
-use serde::{Deserialize, Serialize};
-
-/// Public parameter model for shell execution requests.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct ShellExecParams {
-    pub command: Option<String>,
-    pub cwd: Option<String>,
-    pub timeout_secs: Option<u64>,
-    pub run_diagnostics: Option<bool>,
-    pub problem_matcher: Option<String>,
-}
-
 // ─── Semantic index hooks ────────────────────────────────────────────────────
 //
 // The minimal branch keeps filesystem mutations independent from any

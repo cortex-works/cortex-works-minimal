@@ -122,4 +122,48 @@ mod tests {
             "cortex_manage_ast_languages".to_string(),
         ]);
     }
+
+    /// Every schema must have a non-empty name, description, and inputSchema.
+    /// This guards against accidentally shipping a bare Null or empty placeholder.
+    #[test]
+    fn all_schemas_are_structurally_complete() {
+        for schema in all_tool_schemas() {
+            let name = schema["name"].as_str().unwrap_or("");
+            assert!(!name.is_empty(), "Schema is missing 'name'");
+
+            let desc = schema["description"].as_str().unwrap_or("");
+            assert!(!desc.is_empty(), "Schema '{name}' is missing 'description'");
+
+            assert!(
+                schema["inputSchema"].is_object(),
+                "Schema '{name}' is missing 'inputSchema'"
+            );
+        }
+    }
+
+    /// The action constants in grammar_manager must match the schema enum values so that
+    /// adding a new action to the schema cannot silently leave the dispatcher un-updated.
+    #[test]
+    fn grammar_manager_action_constants_match_schema_enum() {
+        let schema = crate::grammar_manager::tool_schema();
+        let enum_values: Vec<&str> = schema["inputSchema"]["properties"]["action"]["enum"]
+            .as_array()
+            .expect("action must have an enum constraint")
+            .iter()
+            .map(|v| v.as_str().expect("enum value must be a string"))
+            .collect();
+
+        assert!(
+            enum_values.contains(&crate::grammar_manager::ACTION_STATUS),
+            "ACTION_STATUS '{}' not found in schema enum {:?}",
+            crate::grammar_manager::ACTION_STATUS,
+            enum_values
+        );
+        assert!(
+            enum_values.contains(&crate::grammar_manager::ACTION_ADD),
+            "ACTION_ADD '{}' not found in schema enum {:?}",
+            crate::grammar_manager::ACTION_ADD,
+            enum_values
+        );
+    }
 }

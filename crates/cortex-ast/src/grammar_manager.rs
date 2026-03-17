@@ -18,6 +18,11 @@ use std::path::PathBuf;
 pub const CORE_LANGUAGES: &[&str] = &["rust", "typescript", "python"];
 pub const DOWNLOADABLE_LANGUAGES: &[&str] = &["go", "php", "ruby", "java", "c", "cpp", "c_sharp", "dart"];
 
+/// Valid `action` values for `cortex_manage_ast_languages`.
+/// Referenced by both the schema enum and the runtime dispatcher so they cannot drift.
+pub const ACTION_STATUS: &str = "status";
+pub const ACTION_ADD: &str = "add";
+
 pub fn tool_schema() -> Value {
     let available = DOWNLOADABLE_LANGUAGES.join(", ");
     let description = format!(
@@ -66,7 +71,7 @@ pub fn handle_tool_call(
         .trim();
 
     match action {
-        "status" => Ok(serde_json::to_string(&json!({
+        ACTION_STATUS => Ok(serde_json::to_string(&json!({
             "status": "ok",
             "active": crate::inspector::exported_language_config()
                 .read()
@@ -76,8 +81,8 @@ pub fn handle_tool_call(
             "core_languages": CORE_LANGUAGES,
         }))
         .unwrap_or_default()),
-        "add" => add_languages(args, repo_root, workspace_roots),
-        _ => Err("Invalid action. Must be 'status' or 'add'.".to_string()),
+        ACTION_ADD => add_languages(args, repo_root, workspace_roots),
+        _ => Err(format!("Invalid action '{action}'. Must be '{}' or '{}'.", ACTION_STATUS, ACTION_ADD)),
     }
 }
 

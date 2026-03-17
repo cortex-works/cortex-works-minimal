@@ -120,6 +120,20 @@ This staged approach keeps tool output smaller and makes multi-root sessions pra
 - `cortex_search_exact`
 - `cortex_mcp_hot_reload`
 
+## Schema Source of Truth
+
+Tool schemas live in dedicated modules — never inline in `server.rs`:
+
+| File | Owns schema for |
+|------|-----------------|
+| `crates/cortex-ast/src/tool_schemas.rs` | `cortex_code_explorer`, `cortex_symbol_analyzer`, `cortex_chronos` |
+| `crates/cortex-ast/src/grammar_manager.rs` | `cortex_manage_ast_languages` (+ action constants + runtime handler) |
+| `crates/cortex-mcp/src/tools/act.rs` | all 10 ACT-side tools |
+| `crates/cortex-ast/src/server.rs` | dispatch only — no schema text |
+
+Action name constants in `grammar_manager.rs` (`ACTION_STATUS`, `ACTION_ADD`) are shared by both
+the JSON schema enum and the runtime match arm, preventing schema-vs-dispatch drift.
+
 ## Build and Validation
 
 The production build target for this branch is:

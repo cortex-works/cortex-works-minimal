@@ -102,12 +102,6 @@ fn extract_path_from_uri(uri: &str) -> Option<PathBuf> {
 }
 
 impl ServerState {
-    /// Returns the primary workspace root (first in `workspace_roots`).
-    #[allow(dead_code)]
-    pub(crate) fn primary_root(&self) -> Option<&PathBuf> {
-        self.workspace_roots.first()
-    }
-
     /// Returns all currently known workspace roots in priority order.
     pub fn workspace_roots(&self) -> &[PathBuf] {
         &self.workspace_roots
@@ -379,7 +373,7 @@ impl ServerState {
                 let repo_root = if args
                     .get("action")
                     .and_then(|v| v.as_str())
-                    .map(|v| v.trim() == "add")
+                    .map(|v| v.trim() == crate::grammar_manager::ACTION_ADD)
                     .unwrap_or(false)
                 {
                     Some(match self.resolve_target_project(&args) {

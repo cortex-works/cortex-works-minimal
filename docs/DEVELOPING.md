@@ -18,7 +18,6 @@ Fast local compile:
 
 ```bash
 cargo check --workspace
-cargo build --profile release-fast -p cortex-mcp
 ```
 
 Production build:
@@ -29,31 +28,35 @@ cargo build --release -p cortex-mcp
 
 ## Validation Commands
 
-Canonical production validation:
+Full test suite across all crates:
 
 ```bash
-./scripts/test_cortexworks_all.sh
+cargo test --workspace
 ```
 
-Release smoke only:
+Unit tests for the AST schema layer only:
 
 ```bash
-./scripts/test_cortexworks_release.sh
+cargo test -p cortexast tool_schemas
+cargo test -p cortexast grammar_manager
 ```
 
-VS Code MCP config verification only:
+AST server smoke test (requires a debug build):
 
 ```bash
-./scripts/test_cortexworks_all.sh --config-only
+cargo test -p cortexast mcp_stdio_smoke
 ```
 
-## What The Validation Covers
+Full MCP gateway smoke test (builds and exercises all 14 tools end-to-end):
 
-`scripts/test_cortexworks_release.sh` builds the release binary and runs
-`crates/cortex-mcp/tests/full_stack_smoke.rs` against
-`target/release/cortex-mcp`.
+```bash
+cargo test -p cortex-mcp full_tool_smoke_and_hot_reload
+```
 
-The smoke harness validates:
+## What The Tests Cover
+
+`full_tool_smoke_and_hot_reload` builds the release binary and runs a
+comprehensive integration harness that validates:
 
 - the active 14-tool MCP surface from `tools/list`
 - AST tool calls through the real MCP transport
@@ -64,14 +67,7 @@ The smoke harness validates:
 - filesystem patch semantics including `patch_action`
 - supervisor-based `cortex_mcp_hot_reload`
 
-`scripts/verify_cortexworks_mcp_setup.py` validates that the configured VS Code
-`cortex-works` server entry:
-
-- exists in the selected `mcp.json`
-- uses `type = stdio`
-- points to an executable command
-- responds correctly to `initialize`
-- exposes exactly the expected 14 active tools
+`mcp_stdio_smoke` tests the cortex-ast binary directly without the MCP gateway layer.
 
 ## VS Code Config Path
 
@@ -89,6 +85,20 @@ Windows:
 ```text
 %APPDATA%\Code\User\mcp.json
 ```
+
+## Schema Source of Truth
+
+Tool schemas live in dedicated modules — never inline in `server.rs`:
+
+- `crates/cortex-ast/src/tool_schemas.rs` — `cortex_code_explorer`, `cortex_symbol_analyzer`, `cortex_chronos`
+- `crates/cortex-ast/src/grammar_manager.rs` — `cortex_manage_ast_languages` (schema + action constants + runtime handler)
+- `crates/cortex-mcp/src/tools/act.rs` — all 10 ACT tool schemas
+- `crates/cortex-ast/src/server.rs` — dispatch only; no schema text
+
+The `tool_schemas` test suite (`cargo test -p cortexast tool_schemas`) verifies:
+- all 4 AST tools are present in `tools/list`
+- each schema has a non-empty name, description, and inputSchema
+- `grammar_manager` action constants match the schema enum values
 
 ## Dependency Refresh
 

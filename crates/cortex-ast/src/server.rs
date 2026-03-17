@@ -1668,13 +1668,10 @@ fn resolve_path(repo_root: &std::path::Path, workspace_roots: &[PathBuf], p: &st
 
     // Decode `[FolderName]/rest` prefix produced by the multi-root scanner.
     if let Some(inner) = p.strip_prefix('[') {
-        if let Some(bracket_end) = inner.find(']') {
-            let folder_name = &inner[..bracket_end];
-            // `]/` is 2 chars; bare `[Name]` with nothing after is fine (root itself).
-            let subpath = inner
-                .get(bracket_end + 2..)
-                .unwrap_or("")
-                .trim_start_matches('/');
+        if let Some((folder_name, tail)) = inner.split_once(']') {
+            // Strip any leading path separator (forward-slash or backslash) so
+            // `[Folder]/path` and `[Folder]\path` both resolve on all platforms.
+            let subpath = tail.trim_start_matches(['/', '\\']);
 
             for root in workspace_roots {
                 let root_name = root

@@ -232,8 +232,11 @@ pub fn execute_single(
                 let root = resolved_cwd.as_deref().unwrap_or(default_cwd.as_str());
                 let base = std::path::Path::new(root);
                 let cmd = if base.join("Cargo.toml").exists() {
+                    // `cargo check` writes diagnostics to stderr; redirect to stdout so
+                    // the combined output stream captures everything on all platforms.
                     "cargo check 2>&1".to_string()
                 } else if base.join("package.json").exists() {
+                    // npx ships with all Node.js versions ≥ 5.2, so this is safe.
                     "npx tsc --noEmit 2>&1".to_string()
                 } else if base.join("go.mod").exists() {
                     "go build ./... 2>&1".to_string()
@@ -242,9 +245,9 @@ pub fn execute_single(
                     // system install.  On Windows, wrappers are .cmd/.bat files.
                     #[cfg(windows)]
                     let mvnw = if base.join("mvnw.cmd").exists() || base.join("mvnw.bat").exists() {
-                        "mvnw.cmd compile -q".to_string()
+                        "mvnw.cmd compile -q 2>&1".to_string()
                     } else {
-                        "mvn compile -q".to_string()
+                        "mvn compile -q 2>&1".to_string()
                     };
                     #[cfg(not(windows))]
                     let mvnw = if base.join("mvnw").exists() {
@@ -256,9 +259,9 @@ pub fn execute_single(
                 } else if base.join("build.gradle").exists() || base.join("build.gradle.kts").exists() {
                     #[cfg(windows)]
                     let gradlew = if base.join("gradlew.bat").exists() {
-                        "gradlew.bat assemble -q".to_string()
+                        "gradlew.bat assemble -q 2>&1".to_string()
                     } else {
-                        "gradle assemble -q".to_string()
+                        "gradle assemble -q 2>&1".to_string()
                     };
                     #[cfg(not(windows))]
                     let gradlew = if base.join("gradlew").exists() {

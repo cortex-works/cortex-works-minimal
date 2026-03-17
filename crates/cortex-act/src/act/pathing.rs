@@ -92,16 +92,16 @@ pub fn resolve_path_from_root(repo_root: &Path, workspace_roots: &[PathBuf], raw
     }
 
     if let Some(inner) = raw.strip_prefix('[') {
-        if let Some(bracket_end) = inner.find(']') {
-            let folder_name = &inner[..bracket_end];
-            let subpath = inner
-                .get(bracket_end + 2..)
-                .unwrap_or("")
-                .trim_start_matches('/');
+        if let Some((folder_name, tail)) = inner.split_once(']') {
+            // Strip any leading path separator (forward-slash or backslash) so
+            // `[Folder]/path` and `[Folder]\path` both resolve correctly on all
+            // platforms, including Windows where callers may use backslashes.
+            let subpath = tail.trim_start_matches(['/', '\\']);
 
             for root in workspace_roots {
-                let root_name = alias_for_root(root);
-                if root_name == folder_name {
+                let configured_alias = alias_for_root(root);
+                let default_name = default_alias(root);
+                if configured_alias == folder_name || default_name == folder_name {
                     return if subpath.is_empty() {
                         root.clone()
                     } else {
@@ -153,5 +153,8 @@ mod tests {
 
         let resolved = resolve_path(&[root.clone()], "[fixture-root]/src/lib.rs");
         assert_eq!(resolved, nested.join("lib.rs"));
+
+        let windows_style = resolve_path(&[root.clone()], r#"[ProjectA]\src\lib.rs"#);
+        assert_eq!(windows_style, nested.join("lib.rs"));
     }
 }

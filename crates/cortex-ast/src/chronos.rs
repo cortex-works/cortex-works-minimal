@@ -58,7 +58,9 @@ fn resolve_path(repo_root: &Path, workspace_roots: &[PathBuf], p: &str) -> PathB
 
     if let Some(rest) = p.strip_prefix('[') {
         if let Some((folder, tail)) = rest.split_once(']') {
-            let tail = tail.trim_start_matches('/');
+            // Strip any leading path separator so `[Folder]/path` and
+            // `[Folder]\path` (Windows backslash) both work correctly.
+            let tail = tail.trim_start_matches(['/', '\\']);
             if let Some(root) = workspace_roots
                 .iter()
                 .find(|root| root.file_name().and_then(|s| s.to_str()) == Some(folder))

@@ -17,11 +17,14 @@
 //! - Windows : `taskkill /PID <pid> /F`
 //! No `libc` dependency is required — only stdlib + one extra process spawn.
 //!
-//! ## PATH augmentation (Unix only)
+//! ## PATH augmentation
 //! The MCP server may be started by an IDE with a reduced `PATH` that omits
-//! user-local tool directories (e.g. `~/.cargo/bin`).  `run_sync` prepends
-//! the following directories when they exist and are not already in `PATH`:
-//! `~/.cargo/bin`, `~/.local/bin`, `/usr/local/bin`.
+//! user-local tool directories.  `run_sync` prepends the following directories
+//! when they exist and are not already in `PATH`:
+//!
+//! **Unix (macOS / Linux)**:  `~/.cargo/bin`, `~/.local/bin`, `/usr/local/bin`
+//!
+//! **Windows**: `%USERPROFILE%\.cargo\bin`, `%USERPROFILE%\AppData\Roaming\npm`
 
 use anyhow::{Context, Result};
 use regex::Regex;
@@ -205,7 +208,7 @@ pub fn run_sync_with_problem_matcher(
 /// Build a `Command` that runs `command` via the platform-appropriate shell.
 ///
 /// - Unix    : `sh -c <command>`  (also augments PATH — see [`augment_unix_path`])
-/// - Windows : `cmd /C <command>`
+/// - Windows : `cmd /C <command>` (also augments PATH — see [`augment_windows_path`])
 fn build_shell_command(command: &str) -> Command {
     #[cfg(not(windows))]
     {
@@ -218,6 +221,7 @@ fn build_shell_command(command: &str) -> Command {
     {
         let mut cmd = Command::new("cmd");
         cmd.args(["/C", command]);
+        augment_windows_path(&mut cmd);
         cmd
     }
 }
@@ -261,6 +265,65 @@ fn augment_unix_path(cmd: &mut Command) {
         let new_path = format!("{}:{current_path}", prepend.join(":"));
         cmd.env("PATH", new_path);
     }
+}
+
+/// Windows only — prepend common user-local tool directories to the child's
+/// `PATH` when they exist but are absent from the current process `PATH`.
+///
+/// IDEs (e.g. VS Code) may start the MCP server with a restricted `PATH` that
+/// omits user directories, causing commands like `cargo`, `npx`, and `tsc` to
+/// be unavailable inside `cortex_act_shell_exec`.
+///
+/// Directories added (in prepend order, highest priority first):
+/// 1. `%USERPROFILE%\.cargo\bin`            — Rust toolchain via rustup
+/// 2. `%USERPROFILE%\AppData\Roaming\npm`   — npm global binaries (npx, tsc…)
+#[cfg(windows)]
+fn augment_windows_path(cmd: &mut Command) {
+    let userprofile = match std::env::var("USERPROFILE") {
+        Ok(h) if !h.is_empty() => h,
+        // Fall back to HOMEDRIVE+HOMEPATH if USERPROFILE is absent.
+        _ => {
+            let drive = std::env::var("HOMEDRIVE").unwrap_or_default();
+            let path  = std::env::var("HOMEPATH").unwrap_or_default();
+            let combined = format!("{drive}{path}");
+            if combined.trim().is_empty() {
+                return;
+            }
+            combined
+        }
+    };
+
+    let current_path = std::env::var("PATH").unwrap_or_default();
+    if let Some(new_path) = augmented_windows_path(&current_path, &userprofile) {
+        cmd.env("PATH", new_path);
+    }
+}
+
+#[cfg(windows)]
+fn augmented_windows_path(current_path: &str, userprofile: &str) -> Option<String> {
+    // On Windows, PATH is separated by `;`.  Use case-insensitive comparison
+    // because the Windows file-system is case-insensitive.
+    let path_lower: Vec<String> = current_path
+        .split(';')
+        .map(|s| s.trim().to_lowercase())
+        .collect();
+
+    let candidates = [
+        format!("{userprofile}\\.cargo\\bin"),
+        format!("{userprofile}\\AppData\\Roaming\\npm"),
+    ];
+
+    let mut prepend: Vec<String> = Vec::new();
+    for dir in &candidates {
+        let dir_lower = dir.to_lowercase();
+        if !path_lower.iter().any(|c| *c == dir_lower)
+            && std::path::Path::new(dir).is_dir()
+        {
+            prepend.push(dir.clone());
+        }
+    }
+
+    (!prepend.is_empty()).then(|| format!("{};{current_path}", prepend.join(";")))
 }
 
 /// Run `command` synchronously via the platform shell.  Blocks until done
@@ -329,5 +392,49 @@ pub fn run_sync(command: &str, cwd: Option<&str>, timeout_secs: u64) -> Result<S
                 duration_ms: start.elapsed().as_millis() as u64,
             })
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn augmented_windows_path_prepends_cargo_and_npm_dirs() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let userprofile = dir.path().join("user");
+        let cargo_bin = userprofile.join(".cargo").join("bin");
+        let npm_bin = userprofile.join("AppData").join("Roaming").join("npm");
+        std::fs::create_dir_all(&cargo_bin).expect("create cargo dir");
+        std::fs::create_dir_all(&npm_bin).expect("create npm dir");
+
+        let existing = r#"C:\Windows\System32"#;
+        let new_path = augmented_windows_path(existing, &userprofile.to_string_lossy())
+            .expect("should augment windows path");
+
+        let parts: Vec<&str> = new_path.split(';').collect();
+        assert_eq!(parts[0], cargo_bin.to_string_lossy());
+        assert_eq!(parts[1], npm_bin.to_string_lossy());
+        assert!(parts.iter().any(|part| *part == existing));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn augmented_windows_path_skips_existing_entries_case_insensitively() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let userprofile = dir.path().join("user");
+        let cargo_bin = userprofile.join(".cargo").join("bin");
+        let npm_bin = userprofile.join("AppData").join("Roaming").join("npm");
+        std::fs::create_dir_all(&cargo_bin).expect("create cargo dir");
+        std::fs::create_dir_all(&npm_bin).expect("create npm dir");
+
+        let existing = format!(
+            "{};{}",
+            cargo_bin.to_string_lossy().to_string().to_uppercase(),
+            npm_bin.to_string_lossy()
+        );
+
+        assert!(augmented_windows_path(&existing, &userprofile.to_string_lossy()).is_none());
     }
 }

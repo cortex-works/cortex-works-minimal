@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Self-test runner (v2.0.0): exercises ALL CortexAST Megatools against dataset-mixer.
+"""Self-test runner (v0.1.0): exercises ALL CortexAST Megatools against dataset-mixer.
 
 This is a QC harness for:
 - cortex_code_explorer: map_overview + deep_slice

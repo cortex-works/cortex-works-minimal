@@ -66,7 +66,7 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
-## [2.0.0] — 2026-02-23
+## [0.1.0] — 2026-02-23
 
 ### Added — Wasm Plugin Architecture
 - Modular backend: languages loaded as WebAssembly grammars for small binary size.

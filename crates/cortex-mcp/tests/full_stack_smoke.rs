@@ -697,7 +697,7 @@ fn create_fixture_workspace(workspace: &Path) {
         workspace.join("Cargo.toml"),
         r#"[package]
 name = "fixture-workspace"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 
 [lib]

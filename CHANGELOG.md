@@ -5,6 +5,22 @@ All notable changes to cortex-works-minimal will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Added
+
+- Live MCP validation for the 13-tool surface against the real server, including parameter-contract checks
+- Release-prep documentation that captures the verified tool usage patterns, common pitfalls, and workflow guidance
+
+### Changed
+
+- Aligned README and agent instructions with the actual MCP parameter contracts and workspace-routing behavior
+- Cleaned up stale semantic/vector search references across manifests, docs, and smoke tests
+
+### Fixed
+
+- Fixed path normalization for prefixed workspace paths, workspace delete guards, and multi-root deep_slice routing
+
 ## v0.1.0 (2026-03-17)
 
 ### Added

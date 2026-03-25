@@ -1255,7 +1255,7 @@ checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
 
 [[package]]
 name = "cortex-act"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "cortexast",
@@ -1280,7 +1280,7 @@ dependencies = [
 
 [[package]]
 name = "cortex-db"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "arrow-array",
@@ -1299,7 +1299,7 @@ dependencies = [
 
 [[package]]
 name = "cortex-mcp"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "cortex-act",
@@ -1312,7 +1312,7 @@ dependencies = [
 
 [[package]]
 name = "cortexast"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "clap",

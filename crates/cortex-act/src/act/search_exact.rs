@@ -1,7 +1,7 @@
 //! # `cortex_search_exact` — Deterministic Regex Search Over Source Files
 //!
-//! Complements `cortex_semantic_code_search` for cases where vector
-//! similarity is unreliable: exact variable renames, literal string hunts,
+//! Handles deterministic exact/regex lookup for cases such as variable
+//! renames, literal string hunts,
 //! import paths, error codes, etc.
 //!
 //! ## Safety constraints

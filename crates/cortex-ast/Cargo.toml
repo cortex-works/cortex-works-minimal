@@ -21,23 +21,15 @@ anyhow.workspace        = true
 quick-xml.workspace     = true
 toml.workspace          = true
 regex.workspace         = true
-rayon.workspace         = true
-indicatif.workspace     = true
-model2vec-rs.workspace  = true
-xxhash-rust.workspace   = true
 dirs.workspace          = true
 serde_yaml.workspace    = true
 tracing.workspace       = true
-ureq.workspace          = true
 
 # Tree-sitter — deep AST inspection
 tree-sitter.workspace            = true
 tree-sitter-rust.workspace       = true
 tree-sitter-typescript.workspace = true
 tree-sitter-python.workspace     = true
-
-# SQLite-backed memory store (replaces JSONL reader)
-cortex-db = { path = "../cortex-db" }
 
 [dev-dependencies]
 tempfile.workspace = true

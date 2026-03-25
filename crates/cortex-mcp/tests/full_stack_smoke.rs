@@ -6,8 +6,6 @@ use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::thread;
 use std::time::Duration;
 
-use cortex_db::code_store::{CodeNode, upsert_code_nodes};
-use cortex_db::LanceDb;
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
@@ -170,7 +168,6 @@ fn full_tool_smoke_and_hot_reload() {
     let workspace = sandbox.path().join("fixture-workspace");
     fs::create_dir_all(&home).expect("create home");
     create_fixture_workspace(&workspace);
-    seed_semantic_index(&home, &workspace);
 
     let bin = cortex_mcp_bin();
     let workspace_prefix = format!(
@@ -199,7 +196,6 @@ fn full_tool_smoke_and_hot_reload() {
         "cortex_act_sql_surgery",
         "cortex_act_shell_exec",
         "cortex_act_batch_execute",
-        "cortex_semantic_code_search",
         "cortex_search_exact",
         "cortex_fs_manage",
         "cortex_mcp_hot_reload",
@@ -457,18 +453,6 @@ fn full_tool_smoke_and_hot_reload() {
     assert!(!diagnostics.is_error, "run_diagnostics must succeed: {}", diagnostics.text);
     assert!(!diagnostics.text.contains("error:"), "diagnostics should not report compiler errors: {}", diagnostics.text);
 
-    let semantic = client.call_tool(
-        "cortex_semantic_code_search",
-        json!({
-            "query": "greet helper",
-            "project_path": prefixed(""),
-            "extract_code": true,
-            "limit": 3
-        }),
-    );
-    assert_ok(&semantic, "greet");
-    assert!(semantic.text.contains("src/lib.rs"));
-
     let batch_contract = client.call_tool(
         "cortex_act_batch_execute",
         json!({
@@ -613,26 +597,17 @@ fn full_tool_smoke_and_hot_reload() {
                         "regex_pattern": "updated-by-edit-ast",
                         "include_pattern": "src/**"
                     }
-                },
-                {
-                    "tool_name": "cortex_semantic_code_search",
-                    "parameters": {
-                        "query": "wrapper helper",
-                        "project_path": prefixed(""),
-                        "extract_code": true,
-                        "limit": 3
-                    }
                 }
             ]
         }),
     );
     let full_batch_json = parse_batch_summary(&full_batch);
-    assert_eq!(full_batch_json["total"].as_u64(), Some(12));
-    assert_eq!(full_batch_json["passed"].as_u64(), Some(12));
+    assert_eq!(full_batch_json["total"].as_u64(), Some(11));
+    assert_eq!(full_batch_json["passed"].as_u64(), Some(11));
     assert_eq!(full_batch_json["failed"].as_u64(), Some(0));
     assert_eq!(full_batch_json["skipped"].as_u64(), Some(0));
     let full_batch_results = full_batch_json["results"].as_array().expect("full batch results array");
-    assert_eq!(full_batch_results.len(), 12);
+    assert_eq!(full_batch_results.len(), 11);
     assert!(full_batch_results.iter().all(|entry| entry["success"].as_bool().unwrap_or(false)), "all batched operations must succeed: {full_batch_json}");
     let tool_names_in_batch: HashSet<String> = full_batch_results
         .iter()
@@ -650,7 +625,6 @@ fn full_tool_smoke_and_hot_reload() {
         "cortex_fs_manage",
         "cortex_act_shell_exec",
         "cortex_search_exact",
-        "cortex_semantic_code_search",
     ]
     .into_iter()
     .map(str::to_string)
@@ -676,7 +650,7 @@ fn full_tool_smoke_and_hot_reload() {
     let mut supervisor = RpcClient::spawn(&bin, &home, &workspace, false);
     let reloaded_tools = supervisor.tools_list();
     let reloaded_set: HashSet<String> = reloaded_tools.into_iter().collect();
-    assert_eq!(reloaded_set, expected, "hot reload must leave the rebuilt MCP worker usable with the same 14-tool surface");
+    assert_eq!(reloaded_set, expected, "hot reload must leave the rebuilt MCP worker usable with the same 13-tool surface");
 
     let hot_reload_batch = supervisor.call_tool(
         "cortex_act_batch_execute",
@@ -764,31 +738,6 @@ pub fn wrapper() -> &'static str {
     .expect("write schema.sql");
 
     fs::write(workspace.join(".env"), "API_KEY=initial\n").expect("write .env");
-}
-
-fn seed_semantic_index(home: &Path, workspace: &Path) {
-    let db_path = home.join(".cortexast/data/cortex_lance");
-    fs::create_dir_all(&db_path).expect("create lancedb dir");
-
-    let db = LanceDb::open_sync(&db_path).expect("open lancedb");
-    let vector = cortex_db::embed::embed_query("greet helper")
-        .unwrap_or_else(|| vec![0.0_f32; 512]);
-
-    let node = CodeNode {
-        id: format!(
-            "{}::src/lib.rs::greet",
-            workspace.to_string_lossy()
-        ),
-        project_path: workspace.to_string_lossy().to_string(),
-        file_path: "src/lib.rs".to_string(),
-        symbol_name: "greet".to_string(),
-        kind: "function".to_string(),
-        content_hash: "fixture-hash".to_string(),
-        tags: "fixture".to_string(),
-        vector,
-    };
-
-    upsert_code_nodes(&db, &[node]).expect("seed code_nodes");
 }
 
 fn cortex_mcp_bin() -> PathBuf {

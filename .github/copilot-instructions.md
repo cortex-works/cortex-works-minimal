@@ -5,8 +5,8 @@
 ```
 crates/
   cortex-ast/    # Read-only code intelligence: map, symbol analysis, chronos, grammar loading
-  cortex-act/    # Surgical edits, shell execution, exact search, semantic search, filesystem ops
-  cortex-db/     # SQLite + LanceDB helpers used by semantic search and indexing
+  cortex-act/    # Surgical edits, shell execution, exact search, filesystem ops
+  cortex-db/     # LanceDB helpers used by checkpoint storage
   cortex-mcp/    # Single MCP gateway binary exposed to the IDE
 ```
 
@@ -44,7 +44,6 @@ The active runtime surface for this branch is intentionally minimal.
 | Edit SQL DDL by statement name | `cortex_act_sql_surgery` |
 | Run a short command or diagnostics | `cortex_act_shell_exec` |
 | Collapse a short sequential workflow into one tool call | `cortex_act_batch_execute` |
-| Search by concept when you do not know the exact symbol name | `cortex_semantic_code_search` |
 | Search by exact string, regex, path clue, or identifier | `cortex_search_exact` |
 | Create / copy / move / delete files and folders | `cortex_fs_manage` |
 | Patch `.env`, `.ini`, or `key=value` files | `cortex_fs_manage(action=patch)` |
@@ -66,13 +65,11 @@ The active runtime surface for this branch is intentionally minimal.
 - After topology, prefer explicit `target_dirs=[...]` arrays for `map_overview` and `skeleton` instead of a global `.` scan.
 - In single-root work, prefer repo-relative paths first; reserve `[FolderName]/...` for true multi-root work.
 - Once `initialize.workspaceFolders` is present, omit `repoPath` for workspace-wide discovery; pass `repoPath` only when you intentionally want to pin work to one root.
-- Treat singular `target_dir` / `only_dir` fields as compatibility shims only; prefer `target_dirs` / `only_dirs` moving forward.
-- `deep_slice` requires a `target` (the primary file or dir to slice). `only_dirs=[...]` is an ADDITIONAL optional filter that scopes semantic-search ranking within that slice. Call it as `deep_slice(target='src/foo', only_dirs=['src/foo/sub'])` — not `only_dirs` alone.
+- Treat singular `target_dir` / `only_dir` fields as compatibility shims only; prefer `target_dirs` moving forward.
+- `deep_slice` requires a `target` (the primary file or dir to slice). Use `single_file=true` to return only one exact file.
 - For `cortex_search_exact` use `regex_pattern` (or `pattern` as alias) and `project_path` (not `search_dir`) to scope the search.
 - Start repo exploration with `cortex_code_explorer` or `cortex_symbol_analyzer` before falling back to plain text search.
 - Use `cortex_search_exact` for literal strings, regexes, path hunts, and exact symbol names.
-- Use `cortex_semantic_code_search` only for concept lookup. If it returns no results, immediately retry with `cortex_search_exact` or `cortex_code_explorer` — do not assume the code does not exist.
-- When calling `cortex_semantic_code_search`, pass `project_path` whenever possible so the tool can build or refresh the local symbol index on demand.
 
 ## Batch Rules
 
@@ -89,10 +86,10 @@ The active runtime surface for this branch is intentionally minimal.
 ## Situation Guide
 
 - If a language is already supported and you need code or symbols now, do not call `cortex_manage_ast_languages`; go straight to `cortex_code_explorer`, `cortex_symbol_analyzer`, or search.
-- If a repo contains a non-core language and AST-aware tools are missing coverage, call `cortex_manage_ast_languages(action=status)` first, then `action=add` only for the missing parser.
+- If a repo contains a non-core language and AST-aware tools are missing coverage, call `cortex_manage_ast_languages(action=status)` first.
 - If you just added a parser and plan to re-run semantic or AST-heavy tools on one repo, pass `repoPath` so cached semantic records for that repo can be invalidated immediately.
 - If you know the exact symbol, prefer `cortex_symbol_analyzer` over `cortex_code_explorer`.
-- If you know the exact string or regex, prefer `cortex_search_exact` over `cortex_semantic_code_search`.
+- If you know the exact string or regex, prefer `cortex_search_exact`.
 - If you need a physical file operation, prefer `cortex_fs_manage`; do not use structural editors for raw file creation, copies, or deletes.
 - If you need a short command or diagnostics, use `cortex_act_shell_exec`; do not use it for watch mode or dev servers.
 
@@ -113,10 +110,9 @@ The active runtime surface for this branch is intentionally minimal.
 - In multi-root workspaces, avoid `target_dir='.'` unless you intentionally want the primary root only.
 - Prefer `cortex_code_explorer(action=workspace_topology, repoPath=...)` for initial orientation because it lists roots, manifests, and language hints without expanding file trees. **`repoPath` is required** — omitting it causes a CRITICAL safety block.
 - Use `cortex_symbol_analyzer` when you already know the symbol; use `cortex_code_explorer` when you still need to discover the right file or region.
-- For cross-repo work, pass arrays such as `target_dirs=["[cortex-ast]", "[cortex-db]"]` or `only_dirs=["[cortex-db]"]` rather than issuing repeated single-root calls.
+- For cross-repo work, pass arrays such as `target_dirs=["[cortex-ast]", "[cortex-db]"]` rather than issuing repeated single-root calls.
 - For ACT operations inside multi-root workspaces, prefer workspace-prefixed paths over long absolute paths when the target root is already known.
 - Use `cortex_search_exact` only when the search term is literal or regex-shaped.
-- Use `cortex_semantic_code_search` only when you need concept-based lookup and a local semantic index exists.
 - Use `cortex_act_edit_ast` only for Rust, TypeScript, and Python source edits by symbol.
 - Use `cortex_act_edit_data_graph` for JSON and YAML. For TOML, use `cortex_fs_manage(action=write)`.
   - JSON: `action=set` can upsert (insert) any new key at any depth, including top-level (`$.newKey`).
@@ -128,10 +124,9 @@ The active runtime surface for this branch is intentionally minimal.
   - On Unix, PATH is automatically augmented to include `~/.cargo/bin`, `~/.local/bin`, `/usr/local/bin`.
   - `run_diagnostics=true` auto-detects the manifest in `cwd` and runs the appropriate compiler check.
   - `problem_matcher` values: `cargo`, `tsc`, `eslint`, `go`, `python`.
-- `cortex_act_batch_execute` can mix all 14 Cortex tools in one round-trip, but `cortex_mcp_hot_reload` should only appear as the last operation.
-- `cortex_manage_ast_languages(action=add)` downloads Wasm grammars from GitHub tree-sitter releases into `~/.cortex-works/grammars/` and hot-reloads them.
-- `cortex_manage_ast_languages(action=status)` should usually be called before `action=add` so the agent does not re-install parsers that are already active.
-- `cortex_manage_ast_languages(action=add)` returns structured JSON text and surfaces partial failures as an error result. Pass `repoPath` when you want semantic cache invalidation scoped to one repo.
+- `cortex_act_batch_execute` can mix all 13 Cortex tools in one round-trip, but `cortex_mcp_hot_reload` should only appear as the last operation.
+- `cortex_manage_ast_languages(action=add)` is intentionally unsupported in this build (no external downloads).
+- `cortex_manage_ast_languages(action=status)` lists currently active/core languages and known non-core names.
 - `cortex_mcp_hot_reload` restarts the worker through the supervisor on the same stdio channel. After restart, re-run `initialize` and refresh `tools/list` if the client needs updated schema.
 - Do not reference removed services, removed tools, or old boot-order requirements in this branch.
 
@@ -140,7 +135,7 @@ The active runtime surface for this branch is intentionally minimal.
 ```text
 1. cargo build --release -p cortex-mcp
 2. run MCP smoke tests against target/release/cortex-mcp
-3. verify cortex_manage_ast_languages(action=add) with a clean HOME when touching grammar loading
+3. verify cortex_manage_ast_languages(action=status) reports expected language sets
 4. after rebuilding the binary, call cortex_mcp_hot_reload and re-initialize the client before checking tools/list
 ```
 
@@ -156,14 +151,130 @@ cargo run --release -p cortex-mcp
 
 ## Notes For Agents
 
-- The public surface is the 14 active tools only.
+- The public surface is the 13 active tools only.
 - `cortex_code_explorer(action=workspace_topology, repoPath=...)` is the preferred low-token entry point. **Always pass `repoPath`** — omitting it causes the tool to block with a CRITICAL safety error.
-- `map_overview` and `skeleton` accept `target_dirs=[...]`; `deep_slice` accepts `only_dirs=[...]`. Use the array forms first.
+- `map_overview` and `skeleton` accept `target_dirs=[...]`. Use the array form first.
 - In single-root sessions, plain repo-relative paths are usually the least confusing choice.
 - Prefixed paths such as `[cortex-db]/src/lib.rs` are canonical only for real multi-root workspace identifiers.
-- If semantic search returns no results, assume the local vector index is missing or stale, then retry with `project_path` or fall back to exact/code-structure tools.
 - If a non-core language parser is missing, call `cortex_manage_ast_languages` instead of guessing parser support.
 - **Data editing:** JSON supports full upsert (new keys at any depth via `set`). YAML only supports updating existing keys — use `replace` on the parent object to add new keys to YAML.
-- **Batch:** `cortex_act_batch_execute` accepts all 14 tool names, returns a `BatchSummary`, and supports omitted `parameters`. Nesting is not allowed. Put `cortex_mcp_hot_reload` last.
+- **Batch:** `cortex_act_batch_execute` accepts all 13 tool names, returns a `BatchSummary`, and supports omitted `parameters`. Nesting is not allowed. Put `cortex_mcp_hot_reload` last.
 - **Reload after rebuild:** if a just-built tool still behaves like the old code, run `cortex_mcp_hot_reload` before trusting the runtime result. Source changes and live MCP behavior can drift until the worker is reloaded.
 - **Shell PATH:** on Unix the tool automatically adds `~/.cargo/bin`, `~/.local/bin`, `/usr/local/bin` to PATH. `cargo`, `node`, `python3` are available without manual PATH manipulation.
+
+## Parameter Reference — Required Fields Per Action
+
+This section lists the exact required parameters for every action. Using wrong names returns an error immediately.
+
+### `cortex_code_explorer`
+
+| action | Required params | Key optional params |
+|--------|-----------------|---------------------|
+| `workspace_topology` | `repoPath` (absolute path) | — |
+| `map_overview` | `target_dirs` (array) | `repoPath`, `search_filter`, `max_chars` |
+| `deep_slice` | `target` (single file or dir) | `single_file`, `budget_tokens`, `skeleton_only` |
+| `skeleton` | `target_dirs` (array) | `repoPath`, `max_files`, `extensions` |
+
+### `cortex_symbol_analyzer`
+
+| action | Required params | Notes |
+|--------|-----------------|-------|
+| `read_source` | `path` (source file path) + `symbol_name` | Batch: `symbol_names` array. NOT `file`. |
+| `find_usages` | `symbol_name` + `target_dir` | Use `target_dir='.'` for whole repo |
+| `blast_radius` | `symbol_name` + `target_dir` | Run before rename or delete |
+| `find_implementations` | `symbol_name` + `target_dir` | — |
+| `propagation_checklist` | `symbol_name` + `target_dir` | `aliases`, `only_dir`, `changed_path` optional |
+
+### `cortex_chronos`
+
+| action | Required params | Notes |
+|--------|-----------------|-------|
+| `save_checkpoint` | `path` + `symbol_name` + `semantic_tag` | Saves one symbol at a time |
+| `list_checkpoints` | — | Returns all namespaced tags |
+| `compare_checkpoint` | `symbol_name` + `tag_a` + `tag_b` | Use `tag_b='__live__'` to diff against current file |
+| `delete_checkpoint` | `semantic_tag` (or `namespace` to purge group) | — |
+
+### `cortex_act_edit_ast`
+
+```
+file:  repo-relative or absolute path to .rs / .ts / .py file
+edits: [{target: "symbol_name" or "kind:name", action: "replace"|"delete", code: "..."}]
+```
+
+### `cortex_act_edit_data_graph`
+
+```
+file:  path to .json or .yaml file
+edits: [{target: "$.key.path", action: "set"|"replace"|"delete", value: "new_value"}]
+```
+Note: `value` field (not `code`). For YAML, `set`/`replace` update existing keys only; use `replace` on the parent to add a new key.
+
+### `cortex_act_edit_markup`
+
+```
+file:  path to .md / .html / .xml file
+edits: [{target: "heading:Name"|"tag:div"|"id:app"|"table:0", action: "replace"|"delete"|"insert_before"|"insert_after", code: "..."}]
+```
+
+### `cortex_act_sql_surgery`
+
+```
+file:  path to .sql file
+edits: [{target: "create_table:tablename"|"create_index:indexname", action: "replace"|"delete", code: "..."}]
+```
+
+### `cortex_act_shell_exec`
+
+```
+command:         shell command string (required unless run_diagnostics=true)
+cwd:             working directory (repo-relative or absolute)
+run_diagnostics: true — auto-detect manifest and run compiler check
+problem_matcher: "cargo" | "tsc" | "eslint" | "go" | "python"
+timeout_secs:    integer (default 30)
+```
+
+### `cortex_search_exact`
+
+```
+regex_pattern:  string (literal text or regex); alias: pattern
+project_path:   absolute path to scope the search root
+file_types:     ["rs", "ts", ...] — restrict by extension
+```
+
+### `cortex_fs_manage`
+
+Supported actions: `write`, `patch`, `mkdir`, `delete`, `rename`, `move`, `copy`. **No `read` action.**
+
+```
+write:  path + content
+patch:  path + patches (for .env/.ini/key=value only)
+mkdir:  paths (array)
+delete: paths (array) — BLOCKED for paths outside workspace roots (safety guard)
+rename: source + destination
+move:   source + destination
+copy:   source + destination
+```
+
+### `cortex_act_batch_execute`
+
+```
+operations: [{tool_name: "...", parameters: {...}}]   # parameters defaults to {}
+fail_fast:       true | false
+max_chars_per_op: integer (raise for map_overview or deep_slice)
+```
+`cortex_mcp_hot_reload`, if included, must be the **last** operation.
+
+### `cortex_manage_ast_languages`
+
+```
+action: "status"  — lists active core languages and available-to-download parsers
+action: "add"     — NOT supported in this build (returns error)
+```
+
+### `cortex_mcp_hot_reload`
+
+```
+reason: optional description string
+```
+Triggers `exit(42)` in ~500 ms so the supervisor restarts the worker. After restart, re-run `initialize` and `tools/list`.
+

@@ -6,12 +6,9 @@ use cortexast::inspector::render_skeleton;
 use cortexast::mapper::{
     build_map_from_manifests, build_module_graph, build_repo_map, build_repo_map_scoped,
 };
-use cortexast::scanner::{ScanOptions, scan_workspace};
 use cortexast::server::run_stdio_server;
-use cortexast::slicer::{slice_paths_to_xml, slice_to_xml};
-use cortexast::vector_store::CodebaseIndex;
+use cortexast::slicer::slice_to_xml;
 use cortexast::workspace::{WorkspaceDiscoveryOptions, discover_workspace_members_multi};
-use indicatif::{ProgressBar, ProgressStyle};
 use serde_json::json;
 use std::path::PathBuf;
 
@@ -49,23 +46,6 @@ struct Cli {
     #[arg(long, short = 't')]
     target: Option<PathBuf>,
 
-    /// Vector search query; when present, runs local hybrid search and slices only the most relevant files.
-    #[arg(long, value_name = "TEXT")]
-    query: Option<String>,
-
-    /// Max number of files returned from vector search (deduped by path).
-    /// If omitted, a default / auto-tuned value is used.
-    #[arg(long)]
-    query_limit: Option<usize>,
-
-    /// Override the embedding model repo ID (HuggingFace) used by Model2Vec-RS.
-    /// Example: minishlab/potion-retrieval-32M
-    #[arg(long, value_name = "MODEL_ID")]
-    embed_model: Option<String>,
-
-    /// Override snippet size (lines per file) when building the vector index.
-    #[arg(long, value_name = "N")]
-    chunk_lines: Option<usize>,
     /// Output XML to stdout (also writes {output_dir}/active_context.xml)
     #[arg(long)]
     xml: bool,
@@ -102,17 +82,6 @@ enum Command {
         #[arg(long, value_name = "PATH")]
         root: Option<PathBuf>,
     },
-}
-
-fn auto_query_limit(budget_tokens: usize, entry_count: usize, configured_default: usize) -> usize {
-    // Heuristic: with skeleton mode + aggressive cleanup, many repos can fit ~1k-2k tokens/file.
-    // We use a conservative curve and then cap by scanned file count.
-    let budget_based = (budget_tokens / 1_500).clamp(8, 60);
-    let mut out = configured_default.min(budget_based);
-    if entry_count > 0 {
-        out = out.min(entry_count);
-    }
-    out.max(1)
 }
 
 fn main() -> Result<()> {
@@ -195,105 +164,10 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    // Hybrid search mode: build/update local vector index, retrieve relevant files, then slice only those.
-    let (xml, target_label) = if let Some(q) = cli.query.as_ref() {
-        let index_target = cli.target.clone().unwrap_or_else(|| PathBuf::from("."));
-        let mut exclude_dir_names = vec![
-            ".git".into(),
-            "node_modules".into(),
-            "dist".into(),
-            "target".into(),
-            cfg.output_dir.to_string_lossy().to_string(),
-        ];
-        exclude_dir_names.extend(cfg.scan.exclude_dir_names.iter().cloned());
-        let opts = ScanOptions {
-            repo_root: repo_root.clone(),
-            workspace_roots: Vec::new(),
-            target: index_target.clone(),
-            max_file_bytes: cfg.token_estimator.max_file_bytes,
-            exclude_dir_names,
-            extra_glob_excludes: Vec::new(),
-        };
-
-        let scan_spinner = ProgressBar::new_spinner();
-        scan_spinner.set_style(
-            ProgressStyle::with_template("{spinner} scanning files...")
-                .unwrap()
-                .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]),
-        );
-        scan_spinner.enable_steady_tick(std::time::Duration::from_millis(80));
-        let entries = scan_workspace(&opts)?;
-        scan_spinner.finish_with_message(format!("scanned {} files", entries.len()));
-
-        let db_dir = cfg.output_dir.join("db");
-        let model_id = cli
-            .embed_model
-            .as_deref()
-            .unwrap_or(cfg.vector_search.model.as_str());
-        let chunk_lines = cli.chunk_lines.unwrap_or(cfg.vector_search.chunk_lines);
-
-        let model_spinner = ProgressBar::new_spinner();
-        model_spinner.set_style(
-            ProgressStyle::with_template("{spinner} loading embedding model...")
-                .unwrap()
-                .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]),
-        );
-        model_spinner.enable_steady_tick(std::time::Duration::from_millis(100));
-        let mut index = CodebaseIndex::open(&repo_root, &db_dir, model_id, chunk_lines)?;
-        model_spinner.finish_with_message("model ready".to_string());
-
-        // ── JIT Incremental Refresh ──────────────────────────────────────
-        // Before every search, sweep file mtimes and embed only dirty delta.
-        // This guarantees the index is always current without a background watcher.
-        let refresh_spinner = ProgressBar::new_spinner();
-        refresh_spinner.set_style(
-            ProgressStyle::with_template("{spinner} {msg}")
-                .unwrap()
-                .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]),
-        );
-        refresh_spinner.enable_steady_tick(std::time::Duration::from_millis(80));
-        refresh_spinner.set_message("checking index freshness...");
-        match index.refresh(&opts) {
-            Ok((added, updated, deleted)) if added + updated + deleted > 0 => {
-                refresh_spinner
-                    .finish_with_message(format!("index updated: +{added} ~{updated} -{deleted}"));
-            }
-            Ok(_) => {
-                refresh_spinner.finish_with_message("index fresh (no changes)");
-            }
-            Err(e) => {
-                refresh_spinner.finish_with_message(format!("refresh warning: {e}"));
-            }
-        }
-
-        // Run async search on a small runtime.
-        let rt = tokio::runtime::Runtime::new()?;
-        let q_owned = q.clone();
-        let limit = cli.query_limit.unwrap_or_else(|| {
-            auto_query_limit(
-                cli.budget_tokens,
-                entries.len(),
-                cfg.vector_search.default_query_limit,
-            )
-        });
-
-        let rel_paths: Vec<String> =
-            rt.block_on(async move { (index.search(&q_owned, limit).await).unwrap_or_default() });
-
-        let (xml, _meta) = if rel_paths.is_empty() {
-            slice_to_xml(&repo_root, &[], &index_target, cli.budget_tokens, &cfg, false)?
-        } else {
-            slice_paths_to_xml(&repo_root, &[], &rel_paths, None, cli.budget_tokens, &cfg, false)?
-        };
-        (xml, format!("query:{}", q))
-    } else {
-        let target = cli
-            .target
-            .clone()
-            .context("Missing --target (or provide --query)")?;
-        let (xml, _meta) = slice_to_xml(&repo_root, &[], &target, cli.budget_tokens, &cfg, false)?;
-        (xml, target.to_string_lossy().to_string())
-    };
+    // Slice mode: return XML for the requested target path.
+    let target = cli.target.clone().context("Missing --target")?;
+    let (xml, _meta) = slice_to_xml(&repo_root, &[], &target, cli.budget_tokens, &cfg, false)?;
+    let (xml, target_label) = (xml, target.to_string_lossy().to_string());
 
     // Ensure output dir exists and write file.
     let out_dir = repo_root.join(&cfg.output_dir);

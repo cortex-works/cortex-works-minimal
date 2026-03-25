@@ -214,6 +214,32 @@ fn handle_mkdir(args: &Value, workspace_roots: &[PathBuf]) -> Result<String> {
 
 // ── delete ────────────────────────────────────────────────────────────────────
 
+/// Returns `true` when `path` falls under at least one workspace root.
+///
+/// Used as a safety guard before destructive operations: if the agent tries to
+/// delete an absolute path that is outside every known workspace root we reject
+/// it to prevent accidental destruction of unrelated filesystem trees.
+fn is_within_workspace(path: &std::path::Path, workspace_roots: &[PathBuf]) -> bool {
+    if workspace_roots.is_empty() {
+        return true;
+    }
+
+    // Fast path: relative paths are always considered "within" the workspace
+    // (they were resolved from a workspace root by resolve_path).
+    if path.is_relative() {
+        return true;
+    }
+    // Try exact prefix match on the canonical forms of both paths.
+    let canonical_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    for root in workspace_roots {
+        let canonical_root = root.canonicalize().unwrap_or_else(|_| root.clone());
+        if canonical_path.starts_with(&canonical_root) {
+            return true;
+        }
+    }
+    false
+}
+
 fn handle_delete(args: &Value, workspace_roots: &[PathBuf]) -> Result<String> {
     let paths = extract_paths(args);
     if paths.is_empty() {
@@ -232,6 +258,17 @@ fn handle_delete(args: &Value, workspace_roots: &[PathBuf]) -> Result<String> {
         }
 
         let was_dir = path.is_dir();
+
+        // Safety guard: reject absolute paths that escape all workspace roots.
+        // This prevents accidental `remove_dir_all` on unrelated filesystem trees
+        // (e.g. an agent passing "/" or "~" as the delete target).
+        if path.is_absolute() && !is_within_workspace(&path, workspace_roots) {
+            failed.push(format!(
+                "'{}' (blocked: path is outside all workspace roots — use an explicit workspace-relative path)",
+                display_path
+            ));
+            continue;
+        }
 
         let remove_result = if was_dir {
             std::fs::remove_dir_all(&path)

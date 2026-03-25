@@ -28,8 +28,5 @@ lancedb.workspace     = true
 arrow-schema.workspace = true
 arrow-array.workspace  = true
 
-# Embedding model for vector search
-model2vec-rs.workspace = true
-
 [dev-dependencies]
 tempfile.workspace   = true

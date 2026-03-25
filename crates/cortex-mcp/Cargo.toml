@@ -1,5 +1,5 @@
 # ═══════════════════════════════════════════════════════════════════════════
-# cortex-mcp — Minimal MCP Gateway  (14 tools)
+# cortex-mcp — Minimal MCP Gateway  (13 tools)
 #
 # Lean single-binary MCP server: AST analysis + code/file actions.
 # No sync daemon, no proxy, no mesh — just the tool engine.
@@ -9,7 +9,7 @@
 # ═══════════════════════════════════════════════════════════════════════════
 [package]
 name        = "cortex-mcp"
-description = "Minimal MCP Gateway — AST + Act in one binary (14 tools)."
+description = "Minimal MCP Gateway — AST + Act in one binary (13 tools)."
 keywords    = ["llm", "mcp", "rust", "ai", "gateway"]
 categories  = ["command-line-utilities", "development-tools"]
 
@@ -34,5 +34,4 @@ cortex-act = { path = "../cortex-act" }
 
 [dev-dependencies]
 tempfile.workspace = true
-cortex-db = { path = "../cortex-db" }
 

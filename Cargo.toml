@@ -1,5 +1,5 @@
 # ═══════════════════════════════════════════════════════════════════════════
-# cortex-works — Minimal Monorepo (14 tools)
+# cortex-works — Minimal Monorepo (13 tools)
 # ═══════════════════════════════════════════════════════════════════════════
 
 [workspace]
@@ -7,7 +7,7 @@ resolver = "2"
 members = [
     "crates/cortex-ast",   # AST analysis (4 tools)
     "crates/cortex-act",   # File edits + shell (9 tools)
-    "crates/cortex-db",    # Shared DB/vector store (semantic search)
+    "crates/cortex-db",    # Shared DB/persistence helpers
     "crates/cortex-mcp",   # MCP gateway binary
 ]
 
@@ -52,28 +52,13 @@ quick-xml   = "0.31"
 chrono      = { version = "0.4",   features = ["serde"] }
 uuid        = { version = "1.0",   features = ["v4", "serde"] }
 
-# Hashing
-xxhash-rust = { version = "0.8",   features = ["xxh3"] }
-
-# Concurrency
-rayon       = "1.10"
-
-# Progress UI
-indicatif   = "0.17"
-
-# HTTP (sync) — used by cortex-act auto-healer + cortex-ast
-ureq        = { version = "2.12",  features = ["json"] }
-
 # Databases
 sqlparser   = "0.44.0"
 
-# LanceDB — vector store for cortex_semantic_code_search
+# LanceDB
 lancedb     = { version = "0.22", default-features = false }
 arrow-schema = "56"
 arrow-array  = "56"
-
-# Embeddings
-model2vec-rs = "0.1.4"
 
 # JSON Path
 serde_json_path = "0.7.2"

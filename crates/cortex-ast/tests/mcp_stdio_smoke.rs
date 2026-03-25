@@ -109,8 +109,7 @@ fn mcp_stdio_smoke() {
                     "arguments": {
                         "action": "deep_slice",
                         "target": "[cortex-db]/src/lib.rs",
-                        "query": "LanceDb connection handle",
-                        "only_dirs": ["[cortex-db]"],
+                        "single_file": true,
                         "max_chars": 3000
                     }
                 }
@@ -273,7 +272,7 @@ fn mcp_stdio_smoke() {
         );
     }
 
-    // deep_slice with only_dirs
+    // deep_slice with single_file
     {
         let v = replies_by_id.get(&5).expect("deep_slice reply");
         let result = v.get("result").expect("tools/call result");
@@ -286,7 +285,7 @@ fn mcp_stdio_smoke() {
             .and_then(|x| x.as_str())
             .expect("deep_slice text");
         assert!(
-            text.contains("[cortex-db]/src/lib.rs") && text.contains("LanceDb"),
+            text.contains("src/lib.rs") && text.contains("LanceDb"),
             "deep_slice should stay scoped to cortex-db and include the requested symbol context"
         );
     }

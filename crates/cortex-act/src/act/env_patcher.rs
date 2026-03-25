@@ -13,6 +13,18 @@ pub fn patch_env(file: &str, action: &str, key: &str, value: Option<&str>) -> Re
     match action {
         "set" => {
             let v = value.context("'value' required for 'set' action")?;
+
+            // Reject values that contain newlines: writing them verbatim would
+            // inject extra lines into the .env file and silently create new keys.
+            if v.contains('\n') || v.contains('\r') {
+                anyhow::bail!(
+                    "Value for key '{}' contains newline/carriage-return characters. \
+                     This would corrupt the .env file by injecting additional lines. \
+                     Encode the value (e.g., use \\n) before setting it.",
+                    key
+                );
+            }
+
             let new_line = format!("{}={}", key, v);
 
             let mut replaced = false;

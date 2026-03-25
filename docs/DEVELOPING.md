@@ -7,7 +7,7 @@ Recent workspace-aware AST behavior to preserve:
 
 - `cortex_code_explorer(action=workspace_topology)` is the lowest-token orientation step.
 - `map_overview` and `skeleton` prefer `target_dirs=[...]` in multi-root sessions.
-- `deep_slice` can scope semantic ranking with `only_dirs=[...]`.
+- `deep_slice` supports focused slicing with `single_file=true`.
 - Cross-root file references use the `[FolderName]/path/to/file` convention.
 - Both AST and ACT tools must resolve workspace-prefixed paths consistently.
 - ACT tools that accept `file`, `project_path`, `paths`, or `cwd` should continue to work with either workspace-prefixed paths or absolute paths.
@@ -47,7 +47,7 @@ AST server smoke test (requires a debug build):
 cargo test -p cortexast mcp_stdio_smoke
 ```
 
-Full MCP gateway smoke test (builds and exercises all 14 tools end-to-end):
+Full MCP gateway smoke test (builds and exercises all 13 tools end-to-end):
 
 ```bash
 cargo test -p cortex-mcp full_tool_smoke_and_hot_reload
@@ -58,12 +58,11 @@ cargo test -p cortex-mcp full_tool_smoke_and_hot_reload
 `full_tool_smoke_and_hot_reload` builds the release binary and runs a
 comprehensive integration harness that validates:
 
-- the active 14-tool MCP surface from `tools/list`
+- the active 13-tool MCP surface from `tools/list`
 - AST tool calls through the real MCP transport
 - multi-root `initialize.workspaceFolders` handling plus `workspace_topology`
-- array-based `target_dirs` / `only_dirs` flows for workspace-aware AST calls
+- array-based `target_dirs` flows for workspace-aware AST calls
 - ACT tool calls through the real MCP transport, including workspace-prefixed path routing
-- semantic search with seeded local index data
 - filesystem patch semantics including `patch_action`
 - supervisor-based `cortex_mcp_hot_reload`
 
@@ -92,7 +91,7 @@ Tool schemas live in dedicated modules — never inline in `server.rs`:
 
 - `crates/cortex-ast/src/tool_schemas.rs` — `cortex_code_explorer`, `cortex_symbol_analyzer`, `cortex_chronos`
 - `crates/cortex-ast/src/grammar_manager.rs` — `cortex_manage_ast_languages` (schema + action constants + runtime handler)
-- `crates/cortex-mcp/src/tools/act.rs` — all 10 ACT tool schemas
+- `crates/cortex-mcp/src/tools/act.rs` — all 9 ACT tool schemas
 - `crates/cortex-ast/src/server.rs` — dispatch only; no schema text
 
 The `tool_schemas` test suite (`cargo test -p cortexast tool_schemas`) verifies:

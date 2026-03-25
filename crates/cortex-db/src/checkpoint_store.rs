@@ -133,14 +133,35 @@ fn esc(s: &str) -> String {
     s.replace('\'', "''")
 }
 
+/// Lightweight deterministic embedding used in no-network builds.
+///
+/// This preserves vector-search code paths without relying on external models.
+fn deterministic_embedding(text: &str) -> Vec<f32> {
+    let mut out = vec![0.0_f32; VECTOR_DIM as usize];
+    if text.is_empty() {
+        return out;
+    }
+
+    for (i, b) in text.bytes().enumerate() {
+        let idx = i % out.len();
+        out[idx] += (b as f32) / 255.0;
+    }
+
+    let norm = out.iter().map(|v| v * v).sum::<f32>().sqrt();
+    if norm > 0.0 {
+        for v in &mut out {
+            *v /= norm;
+        }
+    }
+    out
+}
+
 // ─── Write ────────────────────────────────────────────────────────────────────
 
 /// Upsert a checkpoint.
 ///
 /// Deletes any existing row whose `concept_key` matches the supplied value,
-/// then inserts a fresh record with a new UUID and updated timestamp.  The
-/// `core_logic` text is embedded via [`crate::embed::embed_passage`]; a
-/// zero vector is stored when the embedding model is unavailable.
+/// then inserts a fresh record with a new UUID and updated timestamp.
 pub fn upsert_checkpoint(
     db: &LanceDb,
     concept_key: &str,
@@ -150,8 +171,7 @@ pub fn upsert_checkpoint(
     let id = Uuid::new_v4().to_string();
     let ts = chrono::Utc::now().to_rfc3339();
     let tags_json = serde_json::to_string(tags).unwrap_or_else(|_| "[]".to_string());
-    let vec = crate::embed::embed_passage(core_logic)
-        .unwrap_or_else(|| vec![0.0_f32; VECTOR_DIM as usize]);
+    let vec = deterministic_embedding(core_logic);
 
     let id_owned = id.clone();
     let ck = concept_key.to_string();

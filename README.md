@@ -1,8 +1,8 @@
 # cortex-works (minimal)
 
-> **One binary. 14 tools. Built to make AI agents faster, cheaper, and more precise.**
+> **One binary. 13 tools. Built to make AI agents faster, cheaper, and more precise.**
 
-`cortex-works-minimal` is a lean MCP server for AI-powered IDEs. It replaces slow, token-hungry IDE tooling with a disciplined surface of 14 surgical tools — covering repo mapping, symbol analysis, structural editing, semantic search, filesystem work, and bounded shell execution.
+`cortex-works-minimal` is a lean MCP server for AI-powered IDEs. It replaces slow, token-hungry IDE tooling with a disciplined surface of 13 surgical tools — covering repo mapping, symbol analysis, structural editing, filesystem work, and bounded shell execution.
 
 ✅ **Cross-platform tested:** macOS, Windows, and Ubuntu (other Linux distros may work too).
 
@@ -42,9 +42,9 @@ Line-number-based edits break as soon as another tool touches the same file. `co
 
 The agent supplies the new content; the tool handles byte offsets, bottom-up ordering, and post-edit validation automatically.
 
-### Built-In Auto-Healer
+### Fail-Safe AST Editing
 
-When an AST edit produces a Rust file with syntax errors, the editor automatically invokes a local LLM (LM Studio / Ollama / llama.cpp) to repair the code before committing the write. The agent never sees a broken file.
+`cortex_act_edit_ast` validates syntax after edits and aborts safely if the output is invalid. This avoids writing broken code to disk.
 
 ### Multi-Root Path Routing, Built-In
 
@@ -56,7 +56,7 @@ VS Code multi-root workspaces, Zed multi-project, and JetBrains polyrepo session
 
 ---
 
-## The 14 Active Tools
+## The 13 Active Tools
 
 ### Intelligence (read-only)
 
@@ -82,7 +82,6 @@ VS Code multi-root workspaces, Zed multi-project, and JetBrains polyrepo session
 | Tool | Use when |
 |------|----------|
 | `cortex_search_exact` | A literal string, regex, or identifier you know exactly |
-| `cortex_semantic_code_search` | A concept you don't know the exact name of |
 | `cortex_act_shell_exec` | Short diagnostic commands; manifest-aware `run_diagnostics` mode |
 | `cortex_act_batch_execute` | Collapsing a sequential workflow (explore → edit → verify) into one call |
 | `cortex_mcp_hot_reload` | After rebuilding, reload the worker on the same stdio channel without restarting the IDE |
@@ -111,13 +110,38 @@ cargo build --release -p cortex-mcp
 ## Recommended Agent Workflow
 
 ```text
-1. cortex_code_explorer(workspace_topology)      ← discover roots cheaply
-2. cortex_code_explorer(map_overview, target_dirs=[...])  ← inspect only what matters
-3. cortex_symbol_analyzer(read_source, ...)      ← read exact code before editing
-4. cortex_chronos(save_checkpoint, ...)          ← rollback point before risky changes
-5. cortex_act_edit_ast / edit_data_graph / …     ← narrowest structural edit
-6. cortex_act_shell_exec(run_diagnostics=true)   ← verify the change compiled
+1. cortex_code_explorer(workspace_topology, repoPath="/abs/path")
+   ← discover workspace roots cheaply (always pass repoPath)
+
+2. cortex_code_explorer(map_overview, target_dirs=["crates/my-crate/src"])
+   ← inspect only the dirs that matter
+
+3. cortex_symbol_analyzer(read_source, path="crates/my-crate/src/lib.rs", symbol_name="MyStruct")
+   ← read exact code before editing (use `path`, not `file`)
+
+4. cortex_chronos(save_checkpoint, path="...", symbol_name="...", semantic_tag="pre-refactor")
+   ← rollback point before risky changes
+
+5. cortex_act_edit_ast / edit_data_graph / edit_markup / …
+   ← narrowest structural edit matching the file type
+
+6. cortex_act_shell_exec(run_diagnostics=true, cwd=".")
+   ← verify the change compiled
 ```
+
+---
+
+## Common Pitfalls
+
+| Wrong | Correct |
+|-------|---------|
+| `cortex_symbol_analyzer(read_source, file="...")` | `path="..."` (not `file`) |
+| `cortex_symbol_analyzer(find_usages, path="...")` | `target_dir="."` (not `path`) |
+| `cortex_chronos(compare_checkpoint, semantic_tag="...")` | `tag_a="before"` + `tag_b="after"` (or `tag_b="__live__"`) |
+| `cortex_fs_manage(action=read, ...)` | No `read` action — use `cortex_symbol_analyzer` or `deep_slice` |
+| `cortex_fs_manage(action=delete, paths=["/tmp/..."])` | Delete is workspace-guarded; use workspace-relative paths |
+| `cortex_act_edit_data_graph(edits=[..., value=..., code=...])` | Field is `value`, not `code` |
+| `cortex_code_explorer(workspace_topology)` without `repoPath` | Always pass `repoPath` (absolute) — omitting it triggers a safety block |
 
 ---
 
@@ -130,7 +154,7 @@ cortex-mcp  (IDE gateway — MCP stdio transport)
     │
     ├── cortex-act  (mutations: AST edits, data/markup/SQL edits, search, shell exec, batching)
     │
-    └── cortex-db   (persistence: LanceDB semantic index, SQLite project metadata)
+    └── cortex-db   (persistence: local checkpoint storage)
 ```
 
 All four crates compile into one binary (`cortex-mcp`). The IDE talks only to that binary.

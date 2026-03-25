@@ -20,6 +20,5 @@ pub mod tool_schemas;
 pub mod server;
 pub mod slicer;
 pub mod universal;
-pub mod vector_store;
 pub mod workspace;
 pub mod xml_builder;

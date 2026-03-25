@@ -1,4 +1,3 @@
-use crate::act::auto_healer::try_auto_heal;
 use anyhow::{Context, Result};
 use std::path::Path;
 
@@ -284,7 +283,6 @@ fn find_block_end(src: &str) -> usize {
 pub fn apply_ast_edits(
     file_path: &Path,
     edits: Vec<AstEdit>,
-    llm_url: Option<&str>,
 ) -> Result<String> {
     // 0. Permission Guard
     check_write_permission(file_path)?;
@@ -348,20 +346,11 @@ pub fn apply_ast_edits(
         if let Some(tree) = parser.parse(&current_source, None) {
             if tree.root_node().has_error() {
                 let ts_errors = collect_ts_errors(tree.root_node(), &current_source);
-                eprintln!(
-                    "[cortex-act] AST validation failed ({} errors). Invoking Auto-Healer...",
-                    ts_errors.len()
+                anyhow::bail!(
+                    "Edit produced {} syntax error(s): {}. Edit aborted safely.",
+                    ts_errors.len(),
+                    ts_errors.join("; ")
                 );
-                current_source = try_auto_heal(file_path, &current_source, &ts_errors, llm_url)?;
-
-                // Final re-check
-                if let Some(final_tree) = parser.parse(&current_source, None) {
-                    if final_tree.root_node().has_error() {
-                        anyhow::bail!(
-                            "Auto-Healer produced code still containing syntax errors. Edit aborted safely."
-                        );
-                    }
-                }
             }
         }
     }

@@ -337,7 +337,20 @@ pub fn run_sync(command: &str, cwd: Option<&str>, timeout_secs: u64) -> Result<S
     let start = Instant::now();
 
     let mut cmd = build_shell_command(command);
-    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+    cmd.stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        // Close stdin so SSH / sshpass never inherit the MCP server's stdio
+        // pipe and hang waiting for input (e.g. `ssh host 'python3 -'`).
+        .stdin(Stdio::null());
+
+    // Unix: put the child in its own process group so that a timeout kill
+    // signal reaches sshpass, ssh, and all remote-forwarded children — not
+    // just the `sh -c` wrapper.
+    #[cfg(not(windows))]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
 
     if let Some(dir) = cwd {
         cmd.current_dir(dir);
@@ -370,8 +383,17 @@ pub fn run_sync(command: &str, cwd: Option<&str>, timeout_secs: u64) -> Result<S
         Err(_recv_timeout) => {
             // Best-effort kill.  Uses only stdlib + one extra process spawn
             // so no libc / windows-sys dependency is needed.
+            //
+            // Unix: kill the entire process group (negative PID) first so
+            // that sshpass, ssh, and any remote-forwarded processes are all
+            // terminated.  Fall back to killing the individual PID as well.
             #[cfg(not(windows))]
-            let _ = Command::new("kill").args(["-9", &pid.to_string()]).output();
+            {
+                let _ = Command::new("kill")
+                    .args(["-9", &format!("-{pid}")])
+                    .output();
+                let _ = Command::new("kill").args(["-9", &pid.to_string()]).output();
+            }
             #[cfg(windows)]
             let _ = Command::new("taskkill")
                 .args(["/PID", &pid.to_string(), "/F"])

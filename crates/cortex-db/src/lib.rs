@@ -2,16 +2,10 @@
 //!
 //! Unified LanceDB data layer for the Cortex-Works monorepo.
 //!
-//! Replaces the old SQLite + DuckDB dual approach with a single
-//! Apache Arrow–backed LanceDB store supporting structured metadata
-//! queries and GB-scale vector search.
+//! The minimal branch currently exposes checkpoint persistence helpers
+//! used by Chronos and related workflows.
 
 pub mod checkpoint_store;
-pub mod code_store;
-pub mod embed;
-pub mod memory_store;
-pub mod project_store;
-pub mod rules_store;
 
 use anyhow::Result;
 use dirs::home_dir;

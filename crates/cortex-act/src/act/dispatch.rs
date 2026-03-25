@@ -45,10 +45,6 @@ pub fn execute_single(
         "cortex_act_edit_ast" => {
             let file_str = req_str!("file");
             let edits_val = req_arr!("edits");
-            let llm_url = args
-                .get("llm_url")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
             let file_path = crate::act::pathing::resolve_path(workspace_roots, file_str);
 
             let mut edits = Vec::new();
@@ -78,7 +74,7 @@ pub fn execute_single(
                 });
             }
 
-            crate::act::editor::apply_ast_edits(&file_path, edits, llm_url.as_deref())
+            crate::act::editor::apply_ast_edits(&file_path, edits)
                 .map(|result| {
                     let preview: String = result.chars().take(500).collect();
                     serde_json::to_string(&json!({
@@ -297,17 +293,6 @@ pub fn execute_single(
         }
 
         // ── Search / query helpers ────────────────────────────────────────
-        "cortex_semantic_code_search" => {
-            let mut remapped = args.clone();
-            if let Some(project_path) = args.get("project_path").and_then(|v| v.as_str()) {
-                remapped["project_path"] = Value::String(
-                    crate::act::pathing::resolve_path_string(workspace_roots, project_path),
-                );
-            }
-            crate::act::semantic_search::run(&remapped, workspace_roots)
-                .map_err(|e| format!("cortex_semantic_code_search failed: {e}"))
-        }
-
         "cortex_search_exact" => {
             let mut remapped = args.clone();
             if let Some(project_path) = args.get("project_path").and_then(|v| v.as_str()) {
@@ -330,7 +315,7 @@ pub fn execute_single(
             "Unknown tool: '{}'. Available: cortex_act_edit_ast, cortex_fs_manage, \
              cortex_act_edit_data_graph, cortex_act_edit_markup, cortex_act_sql_surgery, \
              cortex_act_shell_exec, cortex_act_batch_execute, \
-             cortex_semantic_code_search, cortex_search_exact, cortex_mcp_hot_reload",
+             cortex_search_exact, cortex_mcp_hot_reload",
             other
         )),
     }

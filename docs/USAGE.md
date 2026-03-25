@@ -20,7 +20,7 @@ This prefix now works across both AST and ACT tools, including:
 
 - `cortex_code_explorer` and `cortex_symbol_analyzer`
 - `cortex_act_edit_ast`, `cortex_act_edit_data_graph`, `cortex_act_edit_markup`, `cortex_act_sql_surgery`
-- `cortex_search_exact`, `cortex_semantic_code_search`, `cortex_fs_manage`, and `cortex_act_shell_exec(cwd=...)`
+- `cortex_search_exact`, `cortex_fs_manage`, and `cortex_act_shell_exec(cwd=...)`
 
 If the argument is not absolute and does not use a prefix, it resolves against the primary workspace root.
 
@@ -29,7 +29,6 @@ If the argument is not absolute and does not use a prefix, it resolves against t
 For multi-root sessions, prefer arrays when the tool supports them:
 
 - `target_dirs=["[frontend]", "[backend]"]` for `map_overview` and `skeleton`
-- `only_dirs=["[backend]"]` for `deep_slice` semantic narrowing
 - `project_path="[backend]"` when using ACT search tools against one root
 
 ---
@@ -80,8 +79,7 @@ If you need to update a trait in `crate-a` and implement it in `crate-b`:
   "arguments": {
     "action": "deep_slice",
     "target": "[crate-b]/src/impl.rs",
-    "query": "impl MyTrait",
-    "only_dirs": ["[crate-b]"]
+    "single_file": true
   }
 }
 ```
@@ -138,12 +136,10 @@ When editing and validating with the ACT tools only:
 }
 ```
 
-### Scenario: Exact Text Search vs Semantic Search
+### Scenario: Exact Text Search
 
 - Use `cortex_search_exact` when you know the string: `TODO(hero)`, `Deprecated`, or a specific error message.
-- Use `cortex_semantic_code_search` when you have a concept: "How do we handle database migrations?" or "Where is the authentication middleware?"
-- When either search can be scoped to one root, pass `project_path="[FolderName]"`.
-- If semantic search returns no results, immediately fall back to `cortex_search_exact` or `cortex_code_explorer`. Do not assume the code does not exist.
+- When search can be scoped to one root, pass `project_path="[FolderName]"`.
 
 ---
 

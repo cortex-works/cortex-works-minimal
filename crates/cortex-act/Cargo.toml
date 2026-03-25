@@ -19,11 +19,9 @@ serde.workspace         = true
 serde_json.workspace    = true
 anyhow.workspace        = true
 regex.workspace         = true
-ureq.workspace          = true
 tracing.workspace       = true
 strip-ansi-escapes      = "0.2"
 glob.workspace          = true
-xxhash-rust.workspace   = true
 
 # Tree-sitter for AST semantic patching
 tree-sitter.workspace       = true
@@ -39,7 +37,6 @@ serde_json_path.workspace   = true
 sqlparser.workspace = true
 
 # Memory retriever + One-Shot RAG
-cortex-db  = { path = "../cortex-db" }
 cortexast  = { path = "../cortex-ast" }
 ignore.workspace = true
 

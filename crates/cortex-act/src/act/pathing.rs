@@ -96,7 +96,8 @@ pub fn resolve_path_from_root(repo_root: &Path, workspace_roots: &[PathBuf], raw
             // Strip any leading path separator (forward-slash or backslash) so
             // `[Folder]/path` and `[Folder]\path` both resolve correctly on all
             // platforms, including Windows where callers may use backslashes.
-            let subpath = tail.trim_start_matches(['/', '\\']);
+            let normalized_tail = tail.replace('\\', "/");
+            let subpath = normalized_tail.trim_start_matches('/');
 
             for root in workspace_roots {
                 let configured_alias = alias_for_root(root);

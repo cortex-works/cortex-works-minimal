@@ -1,4 +1,3 @@
-pub mod auto_healer;
 pub mod batch_executor;
 pub mod data_editor;
 pub mod dispatch;
@@ -9,6 +8,5 @@ pub mod hot_reload;
 pub mod markup_editor;
 pub mod pathing;
 pub mod search_exact;
-pub mod semantic_search;
 pub mod shell_exec;
 pub mod sql_editor;

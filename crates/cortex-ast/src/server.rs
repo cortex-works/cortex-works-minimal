@@ -10,10 +10,7 @@ use crate::inspector::{
     propagation_checklist, read_symbol_with_options, render_skeleton, repo_map_with_filter,
     run_diagnostics,
 };
-use crate::scanner::{ScanOptions, scan_workspace};
-use crate::slicer::{slice_paths_to_xml, slice_to_xml};
-use crate::vector_store::{CodebaseIndex, IndexJob};
-use rayon::prelude::*;
+use crate::slicer::slice_to_xml;
 
 #[derive(Default)]
 pub struct ServerState {
@@ -257,68 +254,22 @@ impl ServerState {
         Ok(fallback)
     }
 
-    /// Resolves the Omni-AST target project logic using the Cortex-DB project map.
-    /// `target_project` must be a path that exists in the DB-backed known_projects map.
+    /// Resolves the target project override from params.
     fn resolve_target_project(&mut self, params: &serde_json::Value) -> Result<PathBuf, String> {
         // 1. Retrieve standard `repo_root` as fallback
         let base_root = self.repo_root_from_params(params)?;
 
-        // 2. Check for Omni-AST `target_project` override
+        // 2. Check for `target_project` override
         if let Some(target_proj_str) = params
             .get("target_project")
             .and_then(|v| v.as_str())
             .filter(|s| !s.is_empty())
         {
-            // 3. Load Cortex-DB project map
-            let db = cortex_db::LanceDb::open_default_sync()
-                .map_err(|e| format!("Failed to open Cortex DB for project map lookup: {e}"))?;
-            let project_map = cortex_db::project_store::list_all(&db)
-                .map_err(|e| format!("Failed to read project map from Cortex DB: {e}"))?;
-
-            let codebases = project_map
-                .get("projects")
-                .and_then(|v| v.as_array())
-                .ok_or_else(|| "Invalid project map format: missing `projects` array.".to_string())?;
-
-            // 4. Resolve by exact path match (or canonical-equivalent match)
-            let mut resolved_path = None;
-            let target_canon = std::fs::canonicalize(target_proj_str).ok();
-            for codebase in codebases {
-                let path = codebase
-                    .get("path")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or_default();
-                if path.is_empty() {
-                    continue;
-                }
-
-                if target_proj_str == path {
-                    resolved_path = Some(PathBuf::from(path));
-                    break;
-                }
-
-                if let (Some(tc), Ok(pc)) = (target_canon.as_ref(), std::fs::canonicalize(path)) {
-                    if *tc == pc {
-                        resolved_path = Some(PathBuf::from(path));
-                        break;
-                    }
-                }
-            }
-
-            // 5. Enforce project-map membership
-            let override_path = match resolved_path {
-                Some(p) => p,
-                None => {
-                    return Err(format!(
-                        "CRITICAL: Omni-AST target_project '{}' is not present in the Cortex DB project map. Track it first via cortex_mesh_manage_map(action='track').",
-                        target_proj_str
-                    ));
-                }
-            };
+            let override_path = PathBuf::from(target_proj_str);
 
             if !override_path.exists() {
                 return Err(format!(
-                    "CRITICAL: Omni-AST target_project path does not exist on disk: '{}'",
+                    "CRITICAL: target_project path does not exist on disk: '{}'",
                     override_path.display()
                 ));
             }
@@ -520,7 +471,7 @@ You can operate on multiple workspace roots simultaneously. Provide arrays of ta
                         }
                     }
                     "deep_slice" => {
-                        let repo_root = match self.resolve_target_project(&args) {
+                        let mut repo_root = match self.resolve_target_project(&args) {
                             Ok(r) => r,
                             Err(e) => return err(e),
                         };
@@ -532,6 +483,24 @@ You can operate on multiple workspace roots simultaneously. Provide arrays of ta
                             );
                         };
                         let target = resolve_path(&repo_root, &self.workspace_roots, target_str);
+
+                        // Multi-root convenience: when `target` resolves under a different
+                        // initialized workspace root and no explicit target_project was
+                        // provided, treat that root as the effective repo root for this call.
+                        if args
+                            .get("target_project")
+                            .and_then(|v| v.as_str())
+                            .filter(|s| !s.is_empty())
+                            .is_none()
+                        {
+                            if let Some(root) = self
+                                .workspace_roots
+                                .iter()
+                                .find(|root| target.starts_with(root))
+                            {
+                                repo_root = root.clone();
+                            }
+                        }
 
                         // Proactive path guard: give a "did you mean?" hint when the target
                         // doesn't exist (e.g. agent passes "orchestrator" instead of "orchestrator.rs").
@@ -599,48 +568,6 @@ You can operate on multiple workspace roots simultaneously. Provide arrays of ta
                                 .filter_map(|x| x.as_str().map(|s| s.to_string()))
                                 .collect();
                             cfg.scan.exclude_dir_names.extend(extra);
-                        }
-
-                        // `single_file=true` bypasses all vector search — returns exactly the
-                        // target file/dir without any semantic cross-file expansion.
-                        let single_file = args
-                            .get("single_file")
-                            .and_then(|v| v.as_bool())
-                            .unwrap_or(false);
-
-                        // `only_dirs` scopes vector-search candidates to one or more subdirectories
-                        // (poly-repo support). When combined with `query=`, prevents cross-module spill.
-                        let only_dirs = parse_string_array_arg(&args, "only_dirs", "only_dir");
-                        let only_dir_prefixes: Vec<String> = only_dirs
-                            .iter()
-                            .filter_map(|s| normalize_scope_prefix(&repo_root, &self.workspace_roots, s))
-                            .collect();
-
-                        // Optional vector search query (skipped when single_file=true).
-                        if !single_file {
-                            if let Some(q) = args
-                                .get("query")
-                                .and_then(|v| v.as_str())
-                                .filter(|s| !s.is_empty())
-                            {
-                                let query_limit = args
-                                    .get("query_limit")
-                                    .and_then(|v| v.as_u64())
-                                    .map(|n| n as usize);
-                                match self.run_query_slice(
-                                    &repo_root,
-                                    &target,
-                                    &only_dir_prefixes,
-                                    q,
-                                    query_limit,
-                                    budget_tokens,
-                                    skeleton_only,
-                                    &cfg,
-                                ) {
-                                    Ok(xml) => return ok(xml),
-                                    Err(e) => return err(format!("query slice failed: {e}")),
-                                }
-                            }
                         }
 
                         match slice_to_xml(&repo_root, &self.workspace_roots, &target, budget_tokens, &cfg, skeleton_only)
@@ -1229,144 +1156,6 @@ Call cortex_chronos with action='list_checkpoints' first to see what exists.".to
         }
     }
 
-    /// Run vector-search-based slicing (query mode) from the MCP server.
-    #[allow(clippy::too_many_arguments)]
-    fn run_query_slice(
-        &mut self,
-        repo_root: &std::path::Path,
-        target: &std::path::Path,
-        only_dirs: &[String],
-        query: &str,
-        query_limit: Option<usize>,
-        budget_tokens: usize,
-        skeleton_only: bool,
-        cfg: &crate::config::Config,
-    ) -> anyhow::Result<String> {
-        let mut exclude_dir_names = vec![
-            ".git".into(),
-            "node_modules".into(),
-            "dist".into(),
-            "target".into(),
-            cfg.output_dir.to_string_lossy().to_string(),
-        ];
-        exclude_dir_names.extend(cfg.scan.exclude_dir_names.iter().cloned());
-
-        let opts = ScanOptions {
-            repo_root: repo_root.to_path_buf(),
-            workspace_roots: self.workspace_roots.clone(),
-            target: target.to_path_buf(),
-            max_file_bytes: cfg.token_estimator.max_file_bytes,
-            exclude_dir_names,
-            extra_glob_excludes: Vec::new(),
-        };
-        let entries = scan_workspace(&opts)?;
-
-        let auto_scope_prefixes = if only_dirs.is_empty() {
-            auto_scope_prefixes(repo_root, &self.workspace_roots, target)
-        } else {
-            only_dirs.to_vec()
-        };
-
-        let candidate_entries: Vec<&crate::scanner::FileEntry> = if auto_scope_prefixes.is_empty() {
-            entries.iter().collect()
-        } else {
-            entries
-                .iter()
-                .filter(|e| {
-                    let rel = e.rel_path.to_string_lossy().replace('\\', "/");
-                    auto_scope_prefixes
-                        .iter()
-                        .any(|prefix| rel == *prefix || rel.starts_with(&format!("{prefix}/")))
-                })
-                .collect()
-        };
-
-        let db_dir = crate::config::central_cache_dir(&self.workspace_roots)
-            .unwrap_or_else(|| repo_root.join(&cfg.output_dir))
-            .join("db");
-        let model_id = cfg.vector_search.model.as_str();
-        let chunk_lines = cfg.vector_search.chunk_lines;
-        let mut index = CodebaseIndex::open(repo_root, &db_dir, model_id, chunk_lines)?;
-
-        let limit = query_limit.unwrap_or_else(|| {
-            let budget_based = (budget_tokens / 1_500).clamp(8, 60);
-            budget_based
-                .min(cfg.vector_search.default_query_limit)
-                .max(1)
-        });
-        let max_candidates = (limit * 12).clamp(80, 400);
-        let terms: Vec<String> = query
-            .split_whitespace()
-            .map(|s| s.trim().to_ascii_lowercase())
-            .filter(|s| s.len() >= 2)
-            .collect();
-
-        let mut scored: Vec<(i32, usize)> = candidate_entries
-            .iter()
-            .enumerate()
-            .map(|(i, e)| {
-                let rel = e.rel_path.to_string_lossy().replace('\\', "/");
-                (score_path(&rel, &terms), i)
-            })
-            .collect();
-        scored.sort_by(|(sa, ia), (sb, ib)| {
-            sb.cmp(sa)
-                .then_with(|| candidate_entries[*ia].bytes.cmp(&candidate_entries[*ib].bytes))
-        });
-
-        let mut to_index: Vec<(String, PathBuf)> = Vec::new();
-        for (_score, idx) in scored.iter().take(max_candidates) {
-            let e = candidate_entries[*idx];
-            let rel = e.rel_path.to_string_lossy().replace('\\', "/");
-            if matches!(index.needs_reindex_path(&rel, &e.abs_path), Ok(true)) {
-                to_index.push((rel, e.abs_path.clone()));
-            }
-        }
-
-        let jobs: Vec<IndexJob> = to_index
-            .par_iter()
-            .filter_map(|(rel, abs)| {
-                let bytes = std::fs::read(abs).ok()?;
-                let content = String::from_utf8(bytes)
-                    .unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).to_string());
-                Some(IndexJob {
-                    rel_path: rel.clone(),
-                    abs_path: abs.clone(),
-                    content,
-                })
-            })
-            .collect();
-
-        let rt = tokio::runtime::Runtime::new()?;
-        let q_owned = query.to_string();
-        let mut rel_paths: Vec<String> = rt.block_on(async move {
-            let _ = index.index_jobs(&jobs, || {}).await;
-            index.search(&q_owned, limit).await.unwrap_or_default()
-        });
-
-        if !auto_scope_prefixes.is_empty() {
-            rel_paths.retain(|p| {
-                auto_scope_prefixes
-                    .iter()
-                    .any(|prefix| p == prefix || p.starts_with(&format!("{prefix}/")))
-            });
-        }
-
-        let (xml, _meta) = if rel_paths.is_empty() {
-            slice_to_xml(repo_root, &self.workspace_roots, target, budget_tokens, cfg, skeleton_only)?
-        } else {
-            slice_paths_to_xml(
-                repo_root,
-                &self.workspace_roots,
-                &rel_paths,
-                Some(&auto_scope_prefixes),
-                budget_tokens,
-                cfg,
-                skeleton_only,
-            )?
-        };
-        Ok(xml)
-    }
 }
 
 fn parse_string_array_arg(
@@ -1404,67 +1193,6 @@ fn effective_workspace_roots(
     } else {
         workspace_roots.to_vec()
     }
-}
-
-fn normalize_scope_prefix(
-    repo_root: &std::path::Path,
-    workspace_roots: &[PathBuf],
-    raw: &str,
-) -> Option<String> {
-    let raw = raw.trim();
-    if raw.is_empty() {
-        return None;
-    }
-    if raw.starts_with('[') {
-        return Some(raw.trim_end_matches('/').replace('\\', "/"));
-    }
-
-    let pb = PathBuf::from(raw);
-    if pb.is_absolute() {
-        return rel_prefix_for_path(repo_root, workspace_roots, &pb);
-    }
-
-    Some(raw.trim_end_matches('/').replace('\\', "/"))
-}
-
-fn rel_prefix_for_path(
-    repo_root: &std::path::Path,
-    workspace_roots: &[PathBuf],
-    path: &std::path::Path,
-) -> Option<String> {
-    let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-    for root in workspace_roots {
-        let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
-        if let Ok(rel) = path.strip_prefix(&root) {
-            let root_name = root.file_name().map(|s| s.to_string_lossy()).unwrap_or_default();
-            let rel = rel.to_string_lossy().replace('\\', "/");
-            return Some(if rel.is_empty() {
-                format!("[{root_name}]")
-            } else {
-                format!("[{root_name}]/{rel}")
-            });
-        }
-    }
-
-    path.strip_prefix(repo_root)
-        .ok()
-        .map(|rel| rel.to_string_lossy().replace('\\', "/"))
-        .filter(|s| !s.is_empty())
-}
-
-fn auto_scope_prefixes(
-    repo_root: &std::path::Path,
-    workspace_roots: &[PathBuf],
-    target: &std::path::Path,
-) -> Vec<String> {
-    let scope_path = if target.is_file() {
-        target.parent().unwrap_or(target)
-    } else {
-        target
-    };
-    rel_prefix_for_path(repo_root, workspace_roots, scope_path)
-        .map(|s| vec![s])
-        .unwrap_or_default()
 }
 
 /// Resolve a path parameter to an absolute `PathBuf`, understanding the
@@ -1508,20 +1236,6 @@ fn resolve_path(repo_root: &std::path::Path, workspace_roots: &[PathBuf], p: &st
     }
 
     repo_root.join(p)
-}
-
-fn score_path(rel_path: &str, terms: &[String]) -> i32 {
-    let p = rel_path.to_ascii_lowercase();
-    let filename = p.rsplit('/').next().unwrap_or(&p);
-    let mut score = 0i32;
-    for t in terms {
-        if filename.contains(t.as_str()) {
-            score += 30;
-        } else if p.contains(t.as_str()) {
-            score += 10;
-        }
-    }
-    score
 }
 
 pub fn run_stdio_server(startup_root: Option<PathBuf>) -> Result<()> {

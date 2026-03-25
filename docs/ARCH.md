@@ -9,7 +9,7 @@ The supported MCP runtime is intentionally small:
 - `cortex-mcp` is the only IDE-facing binary.
 - `cortex-ast` provides read-only code intelligence.
 - `cortex-act` provides edits, searches, filesystem actions, and bounded shell execution.
-- `cortex-db` provides local storage for semantic indexing and related persistence.
+- `cortex-db` provides local storage used by checkpoint features.
 
 Other folders may exist in the monorepo, but they are not part of the active minimal MCP surface unless a task explicitly targets them.
 
@@ -58,7 +58,7 @@ IDE / MCP Client
 ### `cortex-act`
 
 - performs AST-backed source edits and structural data/markup/SQL changes
-- runs bounded shell commands and exact/semantic search helpers
+- runs bounded shell commands and exact search helpers
 - now resolves `[FolderName]/...` paths for edit, search, filesystem, and shell `cwd` parameters using the workspace roots passed down from `cortex-mcp`
 - shell commands execute via `sh -c` on Unix and `cmd /C` on Windows; PATH is augmented on Unix to include `~/.cargo/bin`, `~/.local/bin`, `/usr/local/bin`
 - timeout kill uses `kill -9` on Unix and `taskkill /F` on Windows
@@ -67,8 +67,8 @@ IDE / MCP Client
 ### `cortex-db`
 
 - stores semantic-search data and local project metadata
-- backs the local index used by `cortex_semantic_code_search`
-- remains an implementation detail behind the MCP tools
+- stores checkpoint data used by Chronos and related flows
+- remains an implementation detail behind MCP tools
 
 ## Multi-Root Path Routing
 
@@ -116,7 +116,6 @@ This staged approach keeps tool output smaller and makes multi-root sessions pra
 
 - `cortex_act_shell_exec`
 - `cortex_act_batch_execute`
-- `cortex_semantic_code_search`
 - `cortex_search_exact`
 - `cortex_mcp_hot_reload`
 
@@ -128,7 +127,7 @@ Tool schemas live in dedicated modules — never inline in `server.rs`:
 |------|-----------------|
 | `crates/cortex-ast/src/tool_schemas.rs` | `cortex_code_explorer`, `cortex_symbol_analyzer`, `cortex_chronos` |
 | `crates/cortex-ast/src/grammar_manager.rs` | `cortex_manage_ast_languages` (+ action constants + runtime handler) |
-| `crates/cortex-mcp/src/tools/act.rs` | all 10 ACT-side tools |
+| `crates/cortex-mcp/src/tools/act.rs` | all 9 ACT-side tools |
 | `crates/cortex-ast/src/server.rs` | dispatch only — no schema text |
 
 Action name constants in `grammar_manager.rs` (`ACTION_STATUS`, `ACTION_ADD`) are shared by both

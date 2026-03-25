@@ -1,6 +1,6 @@
 //! # cortex-mcp — Minimal MCP Gateway
 //!
-//! Single `stdio` JSON-RPC 2.0 server exposing the 14 core Cortex-Works tools.
+//! Single `stdio` JSON-RPC 2.0 server exposing the 13 core Cortex-Works tools.
 //! Fully synchronous main loop — no daemon threads, no background services.
 //!
 //! ## Hot-reload (Seamless Rebirth)
@@ -57,7 +57,7 @@ fn run_worker_stdio_server() -> anyhow::Result<()> {
     let mut ast_state = cortexast::server::ServerState::default();
 
     tracing::info!(
-        "cortex-mcp v{} ready — 14 tools active",
+        "cortex-mcp v{} ready — 13 tools active",
         env!("CARGO_PKG_VERSION")
     );
 

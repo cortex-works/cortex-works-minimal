@@ -59,8 +59,7 @@ fn act_schemas() -> Vec<Value> {
                             },
                             "required": ["target", "action"]
                         }
-                    },
-                    "llm_url": { "type": "string", "description": "Auto-Healer LLM endpoint override. Default: http://127.0.0.1:1234/v1/chat/completions." }
+                    }
                 },
                 "required": ["file", "edits"]
             }
@@ -189,21 +188,6 @@ fn act_schemas() -> Vec<Value> {
                     }
                 },
                 "required": ["operations"]
-            }
-        }),
-        json!({
-            "name": "cortex_semantic_code_search",
-            "description": "Concept-based code search over the local semantic index. Use this when you know the intent but not the exact symbol name or filename (e.g. 'database connection pool', 'auth middleware'). If the index is missing, stale, or returns no results, fall back immediately to cortex_search_exact or cortex_code_explorer — do not assume the code does not exist.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "query":        { "type": "string",  "description": "Natural-language description of the code you are looking for (e.g. 'authentication middleware', 'database connection pool')." },
-                    "project_path": { "type": "string",  "description": "Repo-relative, workspace-prefixed (multi-root), or absolute path to the workspace root. Omit to search across all indexed projects." },
-                    "limit":        { "type": "integer", "description": "Max number of symbols to return. Default 5.", "default": 5 },
-                    "extract_code":   { "type": "boolean", "description": "When true, reads each matched source file and injects the exact code body using tree-sitter — one-shot RAG that eliminates a follow-up cortex_code_explorer call. Default false.", "default": false },
-                    "min_similarity": { "type": "number",  "description": "Minimum cosine similarity threshold [0.0–1.0]. Results below this score are filtered out. Default 0.0.", "default": 0.0 }
-                },
-                "required": ["query"]
             }
         }),
         // ── Exact / Ripgrep-style Search ──────────────────────────────

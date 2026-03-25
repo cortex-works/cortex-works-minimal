@@ -2,7 +2,7 @@
 //!
 //! Manages the lifecycle of tree-sitter grammar plugins for non-Core languages.
 //! Core 3 (Rust, TypeScript, Python) are statically linked into the binary.
-//! All other languages are served as `.wasm` grammars fetched from GitHub tree-sitter releases.
+//! Non-core languages require pre-bundled local `.wasm` grammars.
 //!
 //! ## Cache directory
 //! `~/.cortex-works/grammars/<lang>.wasm`
@@ -26,7 +26,7 @@ pub const ACTION_ADD: &str = "add";
 pub fn tool_schema() -> Value {
     let available = DOWNLOADABLE_LANGUAGES.join(", ");
     let description = format!(
-        "Download and hot-reload extra Tree-sitter Wasm grammars from GitHub releases. Core languages are built in; use this only when a non-core parser is missing. Call action=status first to see what is already active, then action=add only for the missing parser. Returns machine-readable JSON text. Available to download: {available}."
+        "Inspect Tree-sitter Wasm grammar availability. Core languages are built in. This build does not download grammars from external sources; non-core languages require pre-bundled local .wasm files. action=status reports active/core languages. action=add is intentionally unsupported in this build. Known non-core language names: {available}."
     );
 
     json!({
@@ -38,12 +38,12 @@ pub fn tool_schema() -> Value {
                 "action": {
                     "type": "string",
                     "enum": ["status", "add"],
-                    "description": "status: list currently active, core, and downloadable languages. add: download and hot-reload one or more missing parsers; returns an error result when any requested language fails."
+                    "description": "status: list currently active, core, and known non-core languages. add: unsupported in this build (external downloads are disabled)."
                 },
                 "languages": {
                     "type": "array",
                     "items": { "type": "string" },
-                    "description": "Language names to install for action=add (e.g. ['go','php','cpp']). Core languages are already built in and do not need downloading."
+                    "description": "Language names for action=add. In this build, add always returns an unsupported error."
                 },
                 "repoPath": {
                     "type": "string",
@@ -61,8 +61,8 @@ pub fn tool_schema() -> Value {
 
 pub fn handle_tool_call(
     args: &Value,
-    repo_root: Option<&std::path::Path>,
-    workspace_roots: &[PathBuf],
+    _repo_root: Option<&std::path::Path>,
+    _workspace_roots: &[PathBuf],
 ) -> std::result::Result<String, String> {
     let action = args
         .get("action")
@@ -81,96 +81,14 @@ pub fn handle_tool_call(
             "core_languages": CORE_LANGUAGES,
         }))
         .unwrap_or_default()),
-        ACTION_ADD => add_languages(args, repo_root, workspace_roots),
+        ACTION_ADD => Err(
+            "action=add is not supported in this build (no external downloads). Bundle grammar .wasm files locally."
+                .to_string(),
+        ),
         _ => Err(format!("Invalid action '{action}'. Must be '{}' or '{}'.", ACTION_STATUS, ACTION_ADD)),
     }
 }
-
-fn add_languages(
-    args: &Value,
-    repo_root: Option<&std::path::Path>,
-    workspace_roots: &[PathBuf],
-) -> std::result::Result<String, String> {
-    let requested = args
-        .get("languages")
-        .and_then(|v| v.as_array())
-        .ok_or_else(|| "No languages provided for 'add' action".to_string())?;
-
-    let mut loaded_langs = Vec::new();
-    let mut failed_langs = Vec::new();
-    let mut exts_to_invalidate = Vec::new();
-
-    {
-        let mut cfg = crate::inspector::exported_language_config()
-            .write()
-            .map_err(|_| "language config lock poisoned".to_string())?;
-        for item in requested {
-            let Some(lang) = item.as_str() else { continue };
-
-            if cfg.active_languages().contains(&lang.to_string()) {
-                loaded_langs.push(lang.to_string());
-                continue;
-            }
-
-            match cfg.add_wasm_driver(lang) {
-                Ok(_) => {
-                    loaded_langs.push(lang.to_string());
-                    exts_to_invalidate.extend(cfg.extensions_for_language(lang));
-                }
-                Err(e) => {
-                    eprintln!("Failed to add wasm driver for {}: {}", lang, e);
-                    failed_langs.push(json!({
-                        "language": lang,
-                        "error": e.to_string(),
-                    }));
-                }
-            }
-        }
-    }
-
-    let repo_root = repo_root
-        .map(std::path::Path::to_path_buf)
-        .or_else(|| workspace_roots.first().cloned())
-        .or_else(|| std::env::current_dir().ok())
-        .unwrap_or_else(|| PathBuf::from("."));
-
-    let mut invalidated = 0;
-    if !exts_to_invalidate.is_empty() {
-        let db_dir = crate::config::central_cache_dir(workspace_roots)
-            .unwrap_or_else(|| repo_root.join(".cortexast"))
-            .join("db");
-        if db_dir.exists() {
-            if let Ok(mut index) = crate::vector_store::CodebaseIndex::open(
-                &repo_root,
-                &db_dir,
-                "nomic-embed-text",
-                60,
-            ) {
-                let refs: Vec<&str> = exts_to_invalidate.iter().map(|s| s.as_str()).collect();
-                invalidated = index.invalidate_extensions(&refs);
-            }
-        }
-    }
-
-    let payload = json!({
-        "status": if failed_langs.is_empty() { "ok" } else { "partial_failure" },
-        "loaded_languages": loaded_langs,
-        "failed_languages": failed_langs,
-        "invalidated_records": invalidated,
-        "invalidated_extensions": exts_to_invalidate,
-        "repo_root": repo_root,
-    });
-
-    let text = serde_json::to_string(&payload).unwrap_or_default();
-    if payload["failed_languages"].as_array().map(|arr| arr.is_empty()).unwrap_or(true) {
-        Ok(text)
-    } else {
-        Err(text)
-    }
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
-// Cache directory helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Returns `~/.cortex-works/grammars/`, creating it if necessary.
@@ -199,8 +117,8 @@ pub fn scm_path(lang: &str) -> Result<PathBuf> {
 /// Ensure `{lang}.wasm` exists in the local cache.
 ///
 /// - If `lang` is one of [`CORE_LANGUAGES`] this is a no-op.
-/// - Otherwise it checks the cache. Missing `.wasm` files are downloaded.
-/// - Network or I/O errors are returned as `Err(...)`.  Callers should fall back
+/// - Otherwise it checks the cache and returns an error if missing.
+/// - This build does not download grammars. Callers should fall back
 ///   gracefully to the universal regex parser.
 pub fn ensure_grammar_available(lang: &str) -> Result<()> {
     // Core languages are statically linked — nothing to do.
@@ -210,7 +128,10 @@ pub fn ensure_grammar_available(lang: &str) -> Result<()> {
 
     let wasm = wasm_path(lang)?;
     if !wasm.exists() {
-        download_artifact(lang, "wasm", &wasm)?;
+        anyhow::bail!(
+            "Grammar for '{lang}' is not available. Bundle the .wasm file at '{}' to enable this language.",
+            wasm.display()
+        );
     }
 
     Ok(())
@@ -221,61 +142,6 @@ pub fn ensure_grammar_available(lang: &str) -> Result<()> {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Map a language name to its GitHub release download URL.
-/// Falls back to a predictable naming convention.
-fn github_wasm_url(lang: &str) -> String {
-    // Some langs have non-standard repo names or non-standard release asset names.
-    match lang {
-        "c_sharp"  => return "https://github.com/tree-sitter/tree-sitter-c-sharp/releases/latest/download/tree-sitter-c_sharp.wasm".to_string(),
-        "cpp"      => return "https://github.com/tree-sitter/tree-sitter-cpp/releases/latest/download/tree-sitter-cpp.wasm".to_string(),
-        "c"        => return "https://github.com/tree-sitter/tree-sitter-c/releases/latest/download/tree-sitter-c.wasm".to_string(),
-        // yaml grammar is maintained by ikatyang, not the main tree-sitter org.
-        "yaml"     => return "https://github.com/ikatyang/tree-sitter-yaml/releases/latest/download/tree-sitter-yaml.wasm".to_string(),
-        // toml: nickel-lang maintains a wasm-releasing fork.
-        "toml"     => return "https://github.com/nickel-lang/tree-sitter-toml/releases/latest/download/tree-sitter-toml.wasm".to_string(),
-        // markdown: official tree-sitter org, asset uses hyphen not underscore.
-        "markdown" => return "https://github.com/tree-sitter/tree-sitter-markdown/releases/latest/download/tree-sitter-markdown.wasm".to_string(),
-        _ => {}
-    }
-    let repo_name = Box::leak(format!("tree-sitter-{lang}").into_boxed_str()) as &str;
-    format!("https://github.com/tree-sitter/{repo_name}/releases/latest/download/{repo_name}.wasm")
-}
-
-/// Download a grammar `.wasm` and write it to `dest`.
-fn download_artifact(lang: &str, kind: &str, dest: &PathBuf) -> Result<()> {
-    if kind != "wasm" {
-        anyhow::bail!("unsupported grammar artifact kind: {kind}");
-    }
-
-    let url = github_wasm_url(lang);
-
-    eprintln!("[grammar_manager] Downloading {url} → {}", dest.display());
-
-    let response = ureq::get(&url)
-        .call()
-        .with_context(|| format!("HTTP GET {url}"))?;
-
-    let status = response.status();
-    if status != 200 {
-        anyhow::bail!("HTTP {status} fetching {url}");
-    }
-
-    let mut body: Vec<u8> = Vec::new();
-    use std::io::Read;
-    response
-        .into_reader()
-        .read_to_end(&mut body)
-        .with_context(|| format!("reading response body from {url}"))?;
-
-    std::fs::write(dest, &body).with_context(|| format!("writing {}", dest.display()))?;
-
-    eprintln!(
-        "[grammar_manager] Saved {lang}.wasm ({} bytes) → {}",
-        body.len(),
-        dest.display()
-    );
-    Ok(())
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Query .scm content loader
 // ─────────────────────────────────────────────────────────────────────────────
@@ -369,23 +235,18 @@ mod tests {
     #[test]
     fn add_requires_languages_array() {
         let err = handle_tool_call(&json!({ "action": "add" }), None, &[])
-            .expect_err("missing languages should fail");
-        assert!(err.contains("No languages provided"));
+            .expect_err("add should be unsupported");
+        assert!(err.contains("not supported"));
     }
 
     #[test]
     fn add_core_language_succeeds_without_network() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let reply = handle_tool_call(
+        let err = handle_tool_call(
             &json!({ "action": "add", "languages": ["rust"] }),
-            Some(temp.path()),
+            None,
             &[],
         )
-        .expect("core language add should succeed");
-        let payload: Value = serde_json::from_str(&reply).expect("add payload json");
-
-        assert_eq!(payload["status"], "ok");
-        assert!(payload["loaded_languages"].to_string().contains("rust"));
-        assert_eq!(payload["failed_languages"].as_array().map(|v| v.len()), Some(0));
+        .expect_err("add should be unsupported");
+        assert!(err.contains("not supported"));
     }
 }

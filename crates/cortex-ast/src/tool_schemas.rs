@@ -19,7 +19,7 @@ pub fn code_explorer_schema() -> Value {
                 "action": {
                     "type": "string",
                     "enum": ["workspace_topology", "map_overview", "deep_slice", "skeleton"],
-                    "description": "workspace_topology: ultra-low-token workspace summary listing only discovered projects, manifests, and language hints. map_overview: bird's-eye symbol map of one or more dirs; in multi-root mode prefer target_dirs=['[Host]','[Daemon]'] instead of '.'. deep_slice: token-budgeted XML with bodies for a concrete target file or dir; use single_file=true for one exact file and query for semantic ranking. skeleton: project-wide YAML signatures-only constitution for one or more explicit target dirs."
+                    "description": "workspace_topology: ultra-low-token workspace summary listing only discovered projects, manifests, and language hints. map_overview: bird's-eye symbol map of one or more dirs; in multi-root mode prefer target_dirs=['[Host]','[Daemon]'] instead of '.'. deep_slice: token-budgeted XML with bodies for a concrete target file or dir; use single_file=true for one exact file. skeleton: project-wide YAML signatures-only constitution for one or more explicit target dirs."
                 },
                 "repoPath": { "type": "string", "description": "Absolute path to the primary repo root. Use this for workspace_topology or when you want to pin exploration to a specific root." },
                 "target_project": { "type": "string", "description": "Cross-project: ID or abs path from network map. Overrides repoPath." },
@@ -32,11 +32,7 @@ pub fn code_explorer_schema() -> Value {
                 "target": { "type": "string", "description": "(deep_slice) Repo-relative path to a file or dir. In multi-root workspaces prefix with [FolderName]/, e.g. '[AnvilSynth]/src/main.rs'." },
                 "budget_tokens": { "type": "integer", "exclusiveMinimum": 0, "description": "(deep_slice) Token budget. Default 32000." },
                 "skeleton_only": { "type": "boolean", "description": "(deep_slice) Strip function bodies, return signatures only." },
-                "query": { "type": "string", "description": "(deep_slice) Semantic query for vector-ranked file selection." },
-                "query_limit": { "type": "integer", "description": "(deep_slice) Max files returned in query mode." },
-                "single_file": { "type": "boolean", "description": "(deep_slice) Skip vector search; return only the exact target file." },
-                "only_dirs": { "type": "array", "items": { "type": "string" }, "description": "(deep_slice) Restrict semantic search to one or more dirs. Use repo-relative paths in single-root repos or [FolderName]/... in multi-root workspaces." },
-                "only_dir": { "type": "string", "description": "Deprecated singular form of only_dirs. Kept for compatibility; prefer only_dirs=[...] moving forward." },
+                "single_file": { "type": "boolean", "description": "(deep_slice) Return only the exact target file (no directory expansion)." },
                 "max_files": { "type": "integer", "description": "(skeleton) Max source files to include (default 200, hard cap 500)." },
                 "extensions": { "type": "array", "items": { "type": "string" }, "description": "(skeleton) Optional list of file extensions to include (e.g. ['rs','ts']). Omit for all supported languages." }
             },

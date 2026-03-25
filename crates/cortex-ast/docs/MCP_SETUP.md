@@ -61,7 +61,7 @@ Fallback priority when `--root` / `CORTEXAST_ROOT` are omitted:
 4. `VSCODE_CWD` — VS Code secondary
 5. `IDEA_INITIAL_DIRECTORY` — JetBrains (IntelliJ, GoLand, WebStorm, …)
 6. `PWD` / `INIT_CWD` — POSIX shell / Zed / Neovim (skipped if equal to `$HOME`)
-7. **Find-up heuristic** — if a tool call includes `path` / `target` / `target_dir` / `target_dirs` / `only_dir` / `only_dirs`, CortexAST walks ancestor directories looking for a project root marker (`.git`, `Cargo.toml`, `package.json`)
+7. **Find-up heuristic** — if a tool call includes `path` / `target` / `target_dir` / `target_dirs`, CortexAST walks ancestor directories looking for a project root marker (`.git`, `Cargo.toml`, `package.json`)
 8. `cwd` (usually `$HOME` in some IDEs). If `cwd` resolves to `$HOME` or OS root, CortexAST returns a **CRITICAL** error and refuses to proceed.
 
 Restart your MCP client after editing the config.
@@ -83,7 +83,7 @@ Megatools (preferred):
 ├─ cortex_code_explorer(action, ...)
 │  ├─ action=workspace_topology(max_chars?, repoPath?)
 │  ├─ action=map_overview(target_dirs? | target_dir?, search_filter?, max_chars?, ignore_gitignore?, repoPath?)
-│  ├─ action=deep_slice(target, budget_tokens?, query?, query_limit?, only_dirs? | only_dir?, skeleton_only?, max_chars?, repoPath?)
+│  ├─ action=deep_slice(target, budget_tokens?, single_file?, skeleton_only?, max_chars?, repoPath?)
 │  │  └─ Returns: token-budget-aware XML slice (optionally skeleton-only)
 │  └─ action=skeleton(target_dirs? | target_dir?, max_chars?, ignore_gitignore?, repoPath?)
 
@@ -115,7 +115,7 @@ Multi-root conventions:
 - Use `[FolderName]/path/to/file` for cross-root paths.
 - In multi-root MCP sessions, let `initialize.workspaceFolders` drive workspace discovery. Pass `repoPath` only when you intentionally want to pin a call to one root.
 - Prefer `target_dirs=["[Backend]", "[Frontend]"]` over a single `target_dir="."` when multiple roots are present.
-- Prefer `only_dirs=["[Backend]"]` to keep `deep_slice` semantic ranking scoped and token-efficient.
+- Prefer explicit `target` paths and use `single_file=true` when you need one exact file.
 
 ## 4) Optional Repo Config
 
@@ -125,7 +125,7 @@ It only accepts `.cortexast.json`.
 Note on real-world usage:
 
 - For MCP usage, `.cortexast.json` is re-read on every tool call, so config edits take effect on the next request (no server restart required).
-- If you change `vector_search.model` or `vector_search.chunk_lines`, CortexAST will automatically reset/rebuild the local vector index on the next query.
+- Vector-search settings are not used in the minimal branch.
 
 Example:
 
@@ -136,11 +136,6 @@ Example:
     "exclude_dir_names": ["generated", "tmp", "fixtures"]
   },
   "skeleton_mode": true,
-  "vector_search": {
-    "model": "minishlab/potion-base-8M",
-    "chunk_lines": 40,
-    "default_query_limit": 30
-  },
   "token_estimator": {
     "chars_per_token": 4,
     "max_file_bytes": 1048576

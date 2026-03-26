@@ -44,7 +44,7 @@ IDE / MCP Client
 ### `cortex-mcp`
 
 - owns the MCP transport over STDIO
-- exposes the 14 active tools in `tools/list`
+- exposes the 13 active tools in `tools/list`
 - dispatches read-only AST requests to `ServerState`
 - dispatches ACT requests through synchronous handlers and passes workspace root context downstream
 

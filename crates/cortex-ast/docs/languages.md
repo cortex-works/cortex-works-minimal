@@ -1,6 +1,6 @@
 # Language Support
 
-CortexAST ships with 3 statically-linked **core languages** and supports 8+ more via **dynamic Wasm grammars** downloaded from GitHub tree-sitter releases.
+CortexAST ships with 3 statically linked **core languages** in this branch and recognizes 8 additional non-core language names for bundled Wasm grammars.
 
 ## Core Languages (always active)
 
@@ -10,30 +10,28 @@ CortexAST ships with 3 statically-linked **core languages** and supports 8+ more
 | TypeScript | `.ts`, `.tsx`   | Static  |
 | Python     | `.py`           | Static  |
 
-## Wasm Languages (installed on demand)
+## Non-Core Wasm Languages
 
-Call `cortex_manage_ast_languages` with `action=add` and `languages=[...]` to download and hot-reload:
+Use `cortex_manage_ast_languages` with `action=status` to inspect the active/core language set plus the known non-core language names. In this minimal branch, `action=add` is intentionally unsupported: the runtime does not download grammars from the network and expects any extra `.wasm` files to be bundled locally.
 
-| Language | Extensions                            | Install name |
-|----------|---------------------------------------|-------------|
-| Go       | `.go`                                 | `go`        |
-| PHP      | `.php`, `.php5`, `.phtml`             | `php`       |
-| C++      | `.cpp`, `.cc`, `.cxx`, `.hpp`, `.hxx` | `cpp`       |
-| C        | `.c`, `.h`                            | `c`         |
-| C#       | `.cs`                                 | `c_sharp`   |
-| Java     | `.java`                               | `java`      |
-| Ruby     | `.rb`, `.rake`                        | `ruby`      |
-| Dart     | `.dart`                               | `dart`      |
+| Language | Extensions                            | Known name |
+|----------|---------------------------------------|------------|
+| Go       | `.go`                                 | `go`       |
+| PHP      | `.php`, `.php5`, `.phtml`             | `php`      |
+| C++      | `.cpp`, `.cc`, `.cxx`, `.hpp`, `.hxx` | `cpp`      |
+| C        | `.c`, `.h`                            | `c`        |
+| C#       | `.cs`                                 | `c_sharp`  |
+| Java     | `.java`                               | `java`     |
+| Ruby     | `.rb`, `.rake`                        | `ruby`     |
+| Dart     | `.dart`                               | `dart`     |
 
 ### Example
 
 ```json
 {
-  "action": "add",
-  "languages": ["go", "php", "cpp", "c_sharp"]
+  "action": "status"
 }
 ```
 
-Grammars are cached in `~/.cortex-works/grammars/` and hot-reloaded without server restart.
-Prune queries are bundled in the binary and written into the same cache directory on startup.
-Source: [GitHub tree-sitter releases](https://github.com/tree-sitter)
+If you bundle extra grammar files locally, place them where the runtime expects cached grammars and then restart or hot-reload the MCP worker.
+Prune queries are bundled in the binary and written into the grammar cache directory on startup.

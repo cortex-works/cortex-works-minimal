@@ -203,23 +203,40 @@ fn full_tool_smoke_and_hot_reload() {
     .into_iter()
     .map(str::to_string)
     .collect();
-    assert_eq!(tool_set, expected, "tools/list must expose exactly the 14 active tools");
+    assert_eq!(tool_set, expected, "tools/list must expose exactly the 13 active tools");
 
     let languages = client.call_tool("cortex_manage_ast_languages", json!({ "action": "status" }));
     assert_ok(&languages, "rust");
     assert!(languages.text.contains("typescript"));
     assert!(languages.text.contains("python"));
 
+    let add_language = client.call_tool(
+        "cortex_manage_ast_languages",
+        json!({ "action": "add", "languages": ["go"] }),
+    );
+    assert_err_contains(&add_language, "not supported in this build");
+
     let repo_map = client.call_tool(
         "cortex_code_explorer",
         json!({
             "action": "map_overview",
             "repoPath": workspace,
-            "target_dir": "."
+            "target_dirs": ["."]
         }),
     );
     assert_ok(&repo_map, "src/");
     assert!(repo_map.text.contains("lib.rs"));
+
+    let project_skeleton = client.call_tool(
+        "cortex_code_explorer",
+        json!({
+            "action": "skeleton",
+            "repoPath": workspace,
+            "target_dirs": ["src"]
+        }),
+    );
+    assert_ok(&project_skeleton, "src/lib.rs");
+    assert!(project_skeleton.text.contains("Greeter"));
 
     let deep_slice = client.call_tool(
         "cortex_code_explorer",
@@ -257,6 +274,17 @@ fn full_tool_smoke_and_hot_reload() {
     );
     assert_ok(&find_usages, "wrapper");
 
+    let find_implementations = client.call_tool(
+        "cortex_symbol_analyzer",
+        json!({
+            "action": "find_implementations",
+            "repoPath": workspace,
+            "symbol_name": "Greeter",
+            "target_dir": "."
+        }),
+    );
+    assert_ok(&find_implementations, "DefaultGreeter");
+
     let blast_radius = client.call_tool(
         "cortex_symbol_analyzer",
         json!({
@@ -267,6 +295,18 @@ fn full_tool_smoke_and_hot_reload() {
         }),
     );
     assert_ok(&blast_radius, "greet");
+
+    let propagation = client.call_tool(
+        "cortex_symbol_analyzer",
+        json!({
+            "action": "propagation_checklist",
+            "repoPath": workspace,
+            "symbol_name": "Greeter",
+            "target_dir": "."
+        }),
+    );
+    assert_ok(&propagation, "Propagation Checklist");
+    assert!(propagation.text.contains("src/lib.rs"));
 
     let checkpoint = client.call_tool(
         "cortex_chronos",
@@ -399,6 +439,19 @@ fn full_tool_smoke_and_hot_reload() {
     );
     assert_ok(&patch, "API_KEY");
     assert!(fs::read_to_string(workspace.join(".env")).expect("read env").contains("API_KEY=patched-secret"));
+
+    let patch_delete = client.call_tool(
+        "cortex_fs_manage",
+        json!({
+            "action": "patch",
+            "paths": [prefixed(".env")],
+            "type": "env",
+            "patch_action": "delete",
+            "target": "API_KEY"
+        }),
+    );
+    assert_ok(&patch_delete, "API_KEY");
+    assert!(!fs::read_to_string(workspace.join(".env")).expect("read env after delete").contains("API_KEY="));
 
     let copy = client.call_tool(
         "cortex_fs_manage",
@@ -708,7 +761,19 @@ path = "src/lib.rs"
 
     fs::write(
         workspace.join("src/lib.rs"),
-        r#"pub fn greet() -> &'static str {
+        r#"pub trait Greeter {
+    fn render(&self) -> &'static str;
+}
+
+pub struct DefaultGreeter;
+
+impl Greeter for DefaultGreeter {
+    fn render(&self) -> &'static str {
+        greet()
+    }
+}
+
+pub fn greet() -> &'static str {
     "hello"
 }
 
@@ -755,6 +820,11 @@ fn path_to_uri(path: &Path) -> String {
 fn assert_ok(reply: &ToolReply, needle: &str) {
     assert!(!reply.is_error, "tool returned error: {}", reply.text);
     assert!(reply.text.contains(needle), "expected `{needle}` in tool output, got: {}", reply.text);
+}
+
+fn assert_err_contains(reply: &ToolReply, needle: &str) {
+    assert!(reply.is_error, "expected tool error containing `{needle}`, got success: {}", reply.text);
+    assert!(reply.text.contains(needle), "expected `{needle}` in tool error, got: {}", reply.text);
 }
 
 fn parse_batch_summary(reply: &ToolReply) -> Value {

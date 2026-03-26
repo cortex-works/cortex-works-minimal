@@ -242,4 +242,41 @@ fn act_schemas() -> Vec<Value> {
     ]
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The number of ACT tools registered here must stay in sync with the
+    /// "13 active" claim in the cortex_act_batch_execute description.
+    /// (4 AST tools + 9 ACT tools = 13 total.)
+    #[test]
+    fn act_tool_count_matches_description() {
+        let tools = register_tools();
+        assert_eq!(
+            tools.len(),
+            9,
+            "Expected 9 ACT tools (4 AST + 9 ACT = 13 total). \
+             Update the cortex_act_batch_execute description if this changes."
+        );
+    }
+
+    /// The cortex_act_batch_execute description must advertise the correct
+    /// total tool count so agents know the full surface without counting manually.
+    #[test]
+    fn batch_execute_description_states_correct_tool_count() {
+        let tools = register_tools();
+        let batch = tools
+            .iter()
+            .find(|t| t.name == "cortex_act_batch_execute")
+            .expect("cortex_act_batch_execute must be present");
+        let desc = batch.schema["description"]
+            .as_str()
+            .expect("cortex_act_batch_execute must have a description");
+        assert!(
+            desc.contains("13 active"),
+            "cortex_act_batch_execute description must say '13 active'; got: {desc}"
+        );
+    }
+}
+
 

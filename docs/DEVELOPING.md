@@ -131,3 +131,31 @@ Before shipping a release build for the minimal branch:
 - Timeout kill uses `kill -9 <pid>` on Unix and `taskkill /PID <pid> /F` on Windows.
 - Maven/Gradle wrappers use `.cmd`/`.bat` extensions on Windows and `./mvnw`/`./gradlew` on Unix.
 - The `permission_guard_catches_readonly` test is guarded with `#[cfg(unix)]` because `std::os::unix::fs::PermissionsExt` is not available on Windows.
+
+## Package Name: `cortexast` vs `cortex-ast`
+
+The Rust *crate directory* is `crates/cortex-ast/` but the Cargo *package name* inside its
+`Cargo.toml` is **`cortexast`** (no hyphen). This means all cargo commands that target this
+crate by package name must use the exact package name:
+
+```bash
+cargo test -p cortexast mcp_stdio_smoke   # correct
+cargo test -p cortex-ast mcp_stdio_smoke  # FAILS — no package with that name
+```
+
+When adding a new `[dependencies]` entry that pulls in this crate, use:
+
+```toml
+cortexast = { path = "../cortex-ast" }
+```
+
+## Fast Linux Smoke Gate
+
+For CI or quick Linux validation, run only the two targeted smoke tests
+instead of the full workspace suite (which takes several minutes):
+
+```bash
+bash scripts/linux_smoke.sh
+```
+
+This runs in ~2 s and covers the full 13-tool MCP surface end-to-end.

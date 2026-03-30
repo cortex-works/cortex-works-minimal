@@ -6,6 +6,18 @@
 
 ✅ **Cross-platform tested:** macOS, Windows, and Ubuntu (other Linux distros may work too).
 
+## Setup
+
+Before building on macOS, make sure the Rust toolchain, Apple command line tools, and CMake are installed:
+
+```bash
+rustup update
+xcode-select --install
+brew install cmake
+```
+
+If you already have the Apple command line tools, you can skip the install step. This repository now uses the default macOS linker, so you do not need a Homebrew-specific `lld` path to build the release binary.
+
 ```bash
 cargo build --release -p cortex-mcp
 ./target/release/cortex-mcp   # wire to your IDE via MCP stdio

@@ -1,12 +1,8 @@
 [build]
 # rustc-wrapper = "/opt/homebrew/bin/sccache"  # macOS only; commented for Linux compatibility
 
-# Use lld (LLVM linker) on macOS — ld64.lld is 2-5x faster than Apple ld for large Rust workspaces.
-# Requires: brew install lld@20
-# macOS Developer Tools tip: add Terminal to System Settings → Privacy & Security → Developer Tools
-# to prevent XProtect from scanning each new binary (fixes the 10-min final link step).
-[target.aarch64-apple-darwin]
-rustflags = ["-C", "link-arg=-fuse-ld=/opt/homebrew/opt/lld@20/bin/ld64.lld"]
+# Use the platform default linker on macOS. This avoids hardcoded Homebrew paths and keeps
+# `cargo build --release -p cortex-mcp` working on a standard Xcode Command Line Tools setup.
 
 [alias]
 # Fast local build helpers

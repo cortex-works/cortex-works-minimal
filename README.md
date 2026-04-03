@@ -56,7 +56,15 @@ VS Code multi-root workspaces, Zed multi-project, and JetBrains polyrepo session
 
 ---
 
-## The 13 Active Tools
+## The 17 Active Tools
+
+### Z4-Native Intelligence
+
+| Tool | Use when |
+|------|----------|
+| `cortex_z4_reg_reader` | You need canonical ids, registry aliases, or one build catalog in low-token form |
+| `cortex_z4_hex_bridge` | A z4 source hides mnemonics or tokens inside `DOC:"0x..."` payloads |
+| `cortex_z4_unit_scan` | You need build-unit membership or rename safety before touching a z4 label |
 
 ### Intelligence (read-only)
 
@@ -65,7 +73,13 @@ VS Code multi-root workspaces, Zed multi-project, and JetBrains polyrepo session
 | `cortex_code_explorer` | First look at an unfamiliar repo; topology, maps, deep slices |
 | `cortex_symbol_analyzer` | You already know the symbol; read source, find usages, blast radius |
 | `cortex_chronos` | Save a rollback point before risky refactors; compare before/after |
-| `cortex_manage_ast_languages` | A non-core parser is missing (Go, PHP, Ruby, Java, C, C++, C#, Dart) |
+| `cortex_manage_ast_languages` | A non-core parser is missing for non-z4 side work |
+
+### Z4-Native Mutation
+
+| Tool | Use when |
+|------|----------|
+| `cortex_z4_atomic_sync` | You want a phase-scoped, validated, focused commit after z4 edits |
 
 ### Structural Mutations
 
@@ -75,14 +89,14 @@ VS Code multi-root workspaces, Zed multi-project, and JetBrains polyrepo session
 | `cortex_act_edit_data_graph` | Updating JSON or YAML keys structurally |
 | `cortex_act_edit_markup` | Rewriting Markdown sections, HTML/XML nodes by heading/tag/id |
 | `cortex_act_sql_surgery` | Replacing a DDL statement (CREATE TABLE, CREATE INDEX, …) |
-| `cortex_fs_manage` | Creating, copying, moving, deleting files and dirs; patching `.env`/`.ini` |
+| `cortex_fs_manage` | Creating, copying, moving, deleting files and dirs; default mutation path for `.z4`, `.filelist`, `.project.z4` |
 
 ### Search, Execution, and Runtime
 
 | Tool | Use when |
 |------|----------|
 | `cortex_search_exact` | A literal string, regex, or identifier you know exactly |
-| `cortex_act_shell_exec` | Short diagnostic commands; manifest-aware `run_diagnostics` mode |
+| `cortex_act_shell_exec` | Short diagnostic commands; z4-aware or manifest-aware `run_diagnostics` mode |
 | `cortex_act_batch_execute` | Collapsing a sequential workflow (explore → edit → verify) into one call |
 | `cortex_mcp_hot_reload` | After rebuilding, reload the worker on the same stdio channel without restarting the IDE |
 

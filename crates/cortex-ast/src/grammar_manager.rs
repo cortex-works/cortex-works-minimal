@@ -26,7 +26,7 @@ pub const ACTION_ADD: &str = "add";
 pub fn tool_schema() -> Value {
     let available = DOWNLOADABLE_LANGUAGES.join(", ");
     let description = format!(
-        "Inspect Tree-sitter Wasm grammar availability. Core languages are built in. This build does not download grammars from external sources; non-core languages require pre-bundled local .wasm files. action=status reports active/core languages. action=add is intentionally unsupported in this build. Known non-core language names: {available}."
+        "Inspect Tree-sitter Wasm grammar availability for non-z4 language work. z4 repos do not depend on this tool in the normal workflow. Core languages are built in. This build does not download grammars from external sources; non-core languages require pre-bundled local .wasm files. action=status reports active/core languages. action=add is intentionally unsupported in this build. Known non-core language names: {available}."
     );
 
     json!({
@@ -38,7 +38,7 @@ pub fn tool_schema() -> Value {
                 "action": {
                     "type": "string",
                     "enum": ["status", "add"],
-                    "description": "status: list currently active, core, and known non-core languages. add: unsupported in this build (external downloads are disabled)."
+                    "description": "status: list currently active, core, and known non-core languages. add: unsupported in this build (external downloads are disabled). On z4-first repos you normally do not need either action."
                 },
                 "languages": {
                     "type": "array",

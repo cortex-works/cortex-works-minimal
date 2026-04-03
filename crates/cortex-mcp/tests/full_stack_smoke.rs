@@ -654,7 +654,7 @@ fn full_tool_smoke_and_hot_reload() {
     let mut supervisor = RpcClient::spawn(&bin, &home, &workspace, false);
     let reloaded_tools = supervisor.tools_list();
     let reloaded_set: HashSet<String> = reloaded_tools.into_iter().collect();
-    assert_eq!(reloaded_set, expected, "hot reload must leave the rebuilt MCP worker usable with the same 13-tool surface");
+    assert_eq!(reloaded_set, expected, "hot reload must leave the rebuilt MCP worker usable with the same tool surface");
 
     let hot_reload_batch = supervisor.call_tool(
         "cortex_act_batch_execute",

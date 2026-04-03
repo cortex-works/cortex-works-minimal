@@ -1,53 +1,32 @@
 # Cortex-Works — Minimal Branch Rules
 
-## Workspace Structure
+## Z4-First Priority
 
-```
-crates/
-  cortex-ast/    # Read-only code intelligence: map, symbol analysis, chronos, grammar loading
-  cortex-act/    # Surgical edits, shell execution, exact search, filesystem ops
-  cortex-db/     # LanceDB helpers used by checkpoint storage
-  cortex-mcp/    # Single MCP gateway binary exposed to the IDE
-```
+This branch is optimized for z4 work first.
 
-AST tool schema source of truth:
-
-- `crates/cortex-ast/src/tool_schemas.rs` — `cortex_code_explorer`, `cortex_symbol_analyzer`, `cortex_chronos`
-- `crates/cortex-ast/src/grammar_manager.rs` — `cortex_manage_ast_languages`
-- `crates/cortex-ast/src/server.rs` — runtime dispatch only; do not duplicate public schema text there
-
-The active runtime surface for this branch is intentionally minimal.
-
-- Focus on `cortex-mcp`, `cortex-ast`, `cortex-act`, and `cortex-db`
-- Ignore legacy or auxiliary folders unless the task explicitly targets them
-- No `cortex-mesh` in the supported MCP tool surface
-- No `cortex-proxy` in the supported MCP tool surface
-- No `cortex-scout` in the supported MCP tool surface
-- No hidden boot-sequence or mutation-gate workflow
+- If `.cortexast.json` enables `z4: true`, prefer the z4-native flow before any generic AST or parser-management flow.
+- Primary z4 loop: `cortex_z4_reg_reader` -> `cortex_code_explorer(action=map_overview)` -> `cortex_z4_unit_scan` -> `cortex_symbol_analyzer` -> `cortex_z4_hex_bridge` -> `cortex_fs_manage` -> `cortex_act_shell_exec(run_diagnostics=true)` -> `cortex_z4_atomic_sync`.
+- Treat generic AST, markup, SQL, and parser-management tools as secondary support for non-z4 side files.
 
 ## Tool Map
 
 | Task | Preferred Tool |
 |------|----------------|
-| First look at an unfamiliar repo | `cortex_code_explorer(action=workspace_topology, repoPath=...)` |
-| Narrow to concrete directories before reading bodies | `cortex_code_explorer(action=map_overview, target_dirs=[...])` |
-| Read one exact symbol or a few exact symbols | `cortex_symbol_analyzer(action=read_source)` |
-| Find callers / references | `cortex_symbol_analyzer(action=find_usages)` |
-| Check rename/delete impact first | `cortex_symbol_analyzer(action=blast_radius)` |
+| First pass on a z4 repo | `cortex_z4_reg_reader(path="z4.reg")` + `cortex_code_explorer(action=map_overview, target_dirs=["."])` |
+| Inspect build-unit membership | `cortex_z4_unit_scan(action=build_units)` |
+| Check rename safety for a z4 label or compiler symbol | `cortex_z4_unit_scan(action=rename_guard)` |
+| Read one exact z4 label or hex symbol | `cortex_symbol_analyzer(action=read_source)` |
+| Find callers / branches for a z4 label | `cortex_symbol_analyzer(action=find_usages)` / `cortex_symbol_analyzer(action=blast_radius)` |
+| Decode `DOC:"0x..."` payloads | `cortex_z4_hex_bridge` |
 | Save a rollback point before risky refactor | `cortex_chronos(action=save_checkpoint)` |
-| Compare current code against a saved checkpoint | `cortex_chronos(action=compare_checkpoint)` |
-| Edit a Rust/TS/Python symbol by name | `cortex_act_edit_ast` |
-| Edit JSON or YAML keys structurally | `cortex_act_edit_data_graph` |
-| Add a new YAML key | `cortex_act_edit_data_graph` with `action=replace` on the parent |
-| Rewrite TOML or raw text wholesale | `cortex_fs_manage(action=write)` |
-| Edit Markdown / HTML / XML by heading, tag, id, or section | `cortex_act_edit_markup` |
-| Edit SQL DDL by statement name | `cortex_act_sql_surgery` |
-| Run a short command or diagnostics | `cortex_act_shell_exec` |
-| Collapse a short sequential workflow into one tool call | `cortex_act_batch_execute` |
-| Search by exact string, regex, path clue, or identifier | `cortex_search_exact` |
-| Create / copy / move / delete files and folders | `cortex_fs_manage` |
-| Patch `.env`, `.ini`, or `key=value` files | `cortex_fs_manage(action=patch)` |
-| Check or install non-core parsers | `cortex_manage_ast_languages` |
+| Mutate `.z4`, `.filelist`, or `.project.z4` files | `cortex_fs_manage` |
+| Validate a z4 repo after edits | `cortex_act_shell_exec(run_diagnostics=true)` |
+| Commit a focused z4 change atomically | `cortex_z4_atomic_sync` |
+| Collapse a z4 inspect/verify bundle into one call | `cortex_act_batch_execute` |
+| Search by exact phase id, build id, label, or opcode | `cortex_search_exact` |
+| Non-z4 structured code edits | `cortex_act_edit_ast` / `cortex_act_edit_data_graph` |
+| Non-z4 markup or SQL edits | `cortex_act_edit_markup` / `cortex_act_sql_surgery` |
+| Check parser inventory for non-z4 side work | `cortex_manage_ast_languages` |
 | Restart the rebuilt MCP worker | `cortex_mcp_hot_reload` |
 
 ## Path Rules
@@ -60,106 +39,73 @@ The active runtime surface for this branch is intentionally minimal.
 ## Tool Selection Priority
 
 - In this workspace, prefer the `cortex-works` MCP tools over generic built-in read/search/edit tools whenever a matching Cortex tool exists.
+- In this branch, treat z4 as the primary workload. If the target repo has `z4: true`, prefer `cortex_z4_reg_reader`, `cortex_z4_unit_scan`, `cortex_z4_hex_bridge`, `cortex_code_explorer`, and `cortex_symbol_analyzer` before generic parser or structural-edit flows.
 - **Always pass `repoPath` to `cortex_code_explorer`** — without it the tool falls back to `$HOME` and returns a CRITICAL safety error.
 - In multi-root sessions, start with `cortex_code_explorer(action=workspace_topology, repoPath=...)` before any broad map or slice call.
-- After topology, prefer explicit `target_dirs=[...]` arrays for `map_overview` and `skeleton` instead of a global `.` scan.
+- In z4 repos, `target_dirs=["."]` is the normal `map_overview` entry point because z4 mode already hides prose/config noise. Narrow further with `search_filter` on file names, phase ids, build ids, or hex labels.
 - In single-root work, prefer repo-relative paths first; reserve `[FolderName]/...` for true multi-root work.
 - Once `initialize.workspaceFolders` is present, omit `repoPath` for workspace-wide discovery; pass `repoPath` only when you intentionally want to pin work to one root.
 - Treat singular `target_dir` / `only_dir` fields as compatibility shims only; prefer `target_dirs` moving forward.
 - `deep_slice` requires a `target` (the primary file or dir to slice). Use `single_file=true` to return only one exact file.
 - For `cortex_search_exact` use `regex_pattern` (or `pattern` as alias) and `project_path` (not `search_dir`) to scope the search.
-- Start repo exploration with `cortex_code_explorer` or `cortex_symbol_analyzer` before falling back to plain text search.
-- Use `cortex_search_exact` for literal strings, regexes, path hunts, and exact symbol names.
+- Start z4 exploration with `cortex_z4_reg_reader` plus `cortex_code_explorer`, then move to `cortex_z4_unit_scan` or `cortex_symbol_analyzer` once you know the unit or exact label.
+- Use `cortex_search_exact` for literal strings, regexes, path hunts, phase ids, build ids, and exact hex labels.
+- For `.z4`, `.filelist`, and `.project.z4` edits, prefer `cortex_fs_manage` for mutation and `cortex_z4_atomic_sync` for final commit. Generic AST/markup/sql editors are secondary on this branch.
+- `cortex_manage_ast_languages` is not part of the normal z4 flow. Reach for it only when you are intentionally working on non-z4 side code that truly needs parser coverage.
 
 ## Batch Rules
 
 - `cortex_act_batch_execute` is sequential, not parallel.
-- Use it for short workflows such as inspect → edit → verify, or several independent reads in one round-trip.
+- Use it for short z4 bundles such as `cortex_z4_reg_reader` -> `cortex_z4_unit_scan` -> `cortex_symbol_analyzer` -> `cortex_act_shell_exec(run_diagnostics=true)`.
 - The tool returns a JSON `BatchSummary` object with `total`, `passed`, `failed`, `skipped`, and `results[]`.
 - Each `results[]` entry contains `index`, `tool_name`, `success`, `output`, `output_chars`, and `truncated`.
 - `parameters` is optional per operation and defaults to `{}`.
 - Never nest `cortex_act_batch_execute` inside itself.
 - If `cortex_mcp_hot_reload` appears in a batch, it must be the final operation because it restarts the worker.
 - Use `fail_fast=true` when later operations depend on earlier ones.
-- Raise `max_chars_per_op` for high-volume tools such as `map_overview` or `deep_slice`.
+- Raise `max_chars_per_op` for high-volume tools such as `map_overview`, `deep_slice`, or z4 build-unit scans.
 
 ## Situation Guide
-
-- If a language is already supported and you need code or symbols now, do not call `cortex_manage_ast_languages`; go straight to `cortex_code_explorer`, `cortex_symbol_analyzer`, or search.
-- If a repo contains a non-core language and AST-aware tools are missing coverage, call `cortex_manage_ast_languages(action=status)` first.
-- If you just added a parser and plan to re-run semantic or AST-heavy tools on one repo, pass `repoPath` so cached semantic records for that repo can be invalidated immediately.
-- If you know the exact symbol, prefer `cortex_symbol_analyzer` over `cortex_code_explorer`.
+- If the repo is `z4: true`, do not start with `cortex_manage_ast_languages`; start with `cortex_z4_reg_reader` and `cortex_code_explorer(action=map_overview, target_dirs=["."])`.
+- If you need the canonical id/path map, use `cortex_z4_reg_reader` first.
+- If you need build-unit boundaries or rename blast radius, use `cortex_z4_unit_scan` before broader search.
+- If you hit `DOC:"0x..."` rows and need the human meaning, use `cortex_z4_hex_bridge`.
+- If you already know the exact z4 label or hex symbol, prefer `cortex_symbol_analyzer` over broad repo mapping.
 - If you know the exact string or regex, prefer `cortex_search_exact`.
-- If you need a physical file operation, prefer `cortex_fs_manage`; do not use structural editors for raw file creation, copies, or deletes.
-- If you need a short command or diagnostics, use `cortex_act_shell_exec`; do not use it for watch mode or dev servers.
+- If you need a physical file operation or a `.z4` mutation, prefer `cortex_fs_manage`; do not use structural editors for raw file creation, copies, or deletes.
+- If you need post-edit verification, use `cortex_act_shell_exec(run_diagnostics=true)`; do not use it for watch mode or dev servers.
+- If you want the final commit to stay phase-scoped and validated, use `cortex_z4_atomic_sync`.
+- Use `cortex_manage_ast_languages` only for non-z4 side code that truly needs parser coverage.
 
 ## Best-Practice Workflow
-
-```
-1. cortex_code_explorer(action=workspace_topology, repoPath=...)      # discover roots — always pass repoPath
-2. cortex_code_explorer(action=map_overview, target_dirs=[...])       # inspect one or more specific roots
-3. cortex_symbol_analyzer(action=read_source)                         # inspect exact code before changing it
-4. cortex_chronos(action=save_checkpoint)                             # before risky refactors
-5. use the narrowest edit tool that matches the file type
-6. cortex_act_shell_exec(run_diagnostics=true, cwd=...)               # verify after edits
-```
-
-## Behavioral Rules
-
-- Prefer `cortex_code_explorer` and `cortex_symbol_analyzer` over blind grep-style exploration.
-- In multi-root workspaces, avoid `target_dir='.'` unless you intentionally want the primary root only.
-- Prefer `cortex_code_explorer(action=workspace_topology, repoPath=...)` for initial orientation because it lists roots, manifests, and language hints without expanding file trees. **`repoPath` is required** — omitting it causes a CRITICAL safety block.
-- Use `cortex_symbol_analyzer` when you already know the symbol; use `cortex_code_explorer` when you still need to discover the right file or region.
-- For cross-repo work, pass arrays such as `target_dirs=["[cortex-ast]", "[cortex-db]"]` rather than issuing repeated single-root calls.
-- For ACT operations inside multi-root workspaces, prefer workspace-prefixed paths over long absolute paths when the target root is already known.
-- Use `cortex_search_exact` only when the search term is literal or regex-shaped.
-- Use `cortex_act_edit_ast` only for Rust, TypeScript, and Python source edits by symbol.
-- Use `cortex_act_edit_data_graph` for JSON and YAML. For TOML, use `cortex_fs_manage(action=write)`.
-  - JSON: `action=set` can upsert (insert) any new key at any depth, including top-level (`$.newKey`).
-  - YAML: `action=set` / `action=replace` only works on **existing** keys. To add a new key to YAML, use `action=replace` on the **parent** object and supply the full updated object.
-- Use `cortex_fs_manage(action=patch)` only for `.env`, `.ini`, and `key=value` format files — not for JSON or YAML.
-- Use `cortex_fs_manage(action=write)` to create or fully overwrite any file (TOML, plain text, etc.).
-- For `cortex_fs_manage(action=patch)`, keep the top-level `action` as `patch` and use `patch_action=set|delete` for the key mutation. If `patch_action` is omitted, the tool defaults to `set`.
-- `cortex_act_shell_exec` is synchronous and bounded. Do not use it for long-running servers or watch mode.
-  - On Unix, PATH is automatically augmented to include `~/.cargo/bin`, `~/.local/bin`, `/usr/local/bin`.
-  - `run_diagnostics=true` auto-detects the manifest in `cwd` and runs the appropriate compiler check.
-  - `problem_matcher` values: `cargo`, `tsc`, `eslint`, `go`, `python`.
-- `cortex_act_batch_execute` can mix all 13 Cortex tools in one round-trip, but `cortex_mcp_hot_reload` should only appear as the last operation.
-- `cortex_manage_ast_languages(action=add)` is intentionally unsupported in this build (no external downloads).
-- `cortex_manage_ast_languages(action=status)` lists currently active/core languages and known non-core names.
-- `cortex_mcp_hot_reload` restarts the worker through the supervisor on the same stdio channel. After restart, re-run `initialize` and refresh `tools/list` if the client needs updated schema.
-- Do not reference removed services, removed tools, or old boot-order requirements in this branch.
-
-## Release Validation
-
 ```text
-1. cargo build --release -p cortex-mcp
-2. run MCP smoke tests against target/release/cortex-mcp
-3. verify cortex_manage_ast_languages(action=status) reports expected language sets
-4. after rebuilding the binary, call cortex_mcp_hot_reload and re-initialize the client before checking tools/list
+1. cortex_z4_reg_reader(path="z4.reg", repoPath=...)                                      # map ids -> canonical source/build-unit paths
+2. cortex_code_explorer(action=map_overview, target_dirs=["."], search_filter="parser|z4c|0x16ab1d44")
+3. cortex_z4_unit_scan(action=rename_guard, symbol_name="f16ab1d44000001f9", repoPath=...) # check unit isolation before rename/edit
+4. cortex_symbol_analyzer(action=read_source, path="z4c.z4", symbol_name="f16ab1d44000001f9")
+5. cortex_z4_hex_bridge(path="parser.z4", symbol_name="fc718ffb200000000", repoPath=...)   # decode nearby DOC payloads when needed
+6. cortex_chronos(action=save_checkpoint, path="z4c.z4", symbol_name="f16ab1d44000001f9", tag="pre-edit")
+7. mutate with cortex_fs_manage or finish with cortex_z4_atomic_sync                          # prefer z4-aware mutation paths
+8. cortex_act_shell_exec(run_diagnostics=true, cwd=...)                                       # verify after edits
 ```
 
-## Running The Stack
-
-```bash
-# Build the only IDE entry point
-cargo build --release -p cortex-mcp
-
-# Run the MCP gateway directly
-cargo run --release -p cortex-mcp
-```
 
 ## Notes For Agents
 
-- The public surface is the 13 active tools only.
+- This branch is z4-first. Generic language support remains available, but z4-native tools and z4-aware validation are the primary workflow.
+- The public surface is the 17 active tools only.
 - `cortex_code_explorer(action=workspace_topology, repoPath=...)` is the preferred low-token entry point. **Always pass `repoPath`** — omitting it causes the tool to block with a CRITICAL safety error.
-- `map_overview` and `skeleton` accept `target_dirs=[...]`. Use the array form first.
+- `map_overview` and `skeleton` accept `target_dirs=[...]`. Use the array form first. In z4 repos, `target_dirs=["."]` is normal because machine-only filtering already shrinks the surface.
 - In single-root sessions, plain repo-relative paths are usually the least confusing choice.
 - Prefixed paths such as `[cortex-db]/src/lib.rs` are canonical only for real multi-root workspace identifiers.
-- If a non-core language parser is missing, call `cortex_manage_ast_languages` instead of guessing parser support.
+- z4 repos often expose exact labels as hex-shaped names rather than human-readable identifiers. Use exact symbol text and avoid regex-shaped guesses.
+- `cortex_z4_unit_scan` defaults to build-unit catalogs only. Keep `z4.reg` for registry/alias lookups through `cortex_z4_reg_reader`, not rename-guard scans.
+- `cortex_z4_hex_bridge` is the normal way to decode embedded DOC payloads; do not paraphrase raw hex when the tool can decode it directly.
+- `cortex_act_edit_ast`, `cortex_act_edit_markup`, and `cortex_act_sql_surgery` are not normal z4 source-edit paths.
+- If a non-core language parser is missing for non-z4 side code, call `cortex_manage_ast_languages` instead of guessing parser support.
 - **Data editing:** JSON supports full upsert (new keys at any depth via `set`). YAML only supports updating existing keys — use `replace` on the parent object to add new keys to YAML.
-- **Batch:** `cortex_act_batch_execute` accepts all 13 tool names, returns a `BatchSummary`, and supports omitted `parameters`. Nesting is not allowed. Put `cortex_mcp_hot_reload` last.
-- **Reload after rebuild:** if a just-built tool still behaves like the old code, run `cortex_mcp_hot_reload` before trusting the runtime result. Source changes and live MCP behavior can drift until the worker is reloaded.
+- **Batch:** `cortex_act_batch_execute` accepts all 17 tool names, returns a `BatchSummary`, and supports omitted `parameters`. Nesting is not allowed. Put `cortex_mcp_hot_reload` last.
+- **Reload after rebuild:** if a just-built z4 tool or schema still behaves like the old code, run `cortex_mcp_hot_reload` before trusting the runtime result. Source changes and live MCP behavior can drift until the worker is reloaded.
 - **Shell PATH:** on Unix the tool automatically adds `~/.cargo/bin`, `~/.local/bin`, `/usr/local/bin` to PATH. `cargo`, `node`, `python3` are available without manual PATH manipulation.
 
 ## Parameter Reference — Required Fields Per Action
@@ -277,4 +223,3 @@ action: "add"     — NOT supported in this build (returns error)
 reason: optional description string
 ```
 Triggers `exit(42)` in ~500 ms so the supervisor restarts the worker. After restart, re-run `initialize` and `tools/list`.
-

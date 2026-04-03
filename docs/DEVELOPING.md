@@ -8,6 +8,7 @@ Recent workspace-aware AST behavior to preserve:
 - `cortex_code_explorer(action=workspace_topology)` is the lowest-token orientation step.
 - `map_overview` and `skeleton` prefer `target_dirs=[...]` in multi-root sessions.
 - `deep_slice` supports focused slicing with `single_file=true`.
+- In z4 repos, start with `cortex_z4_reg_reader` plus `cortex_code_explorer(action=map_overview, target_dirs=["."])` before generic AST flows.
 - Cross-root file references use the `[FolderName]/path/to/file` convention.
 - Both AST and ACT tools must resolve workspace-prefixed paths consistently.
 - ACT tools that accept `file`, `project_path`, `paths`, or `cwd` should continue to work with either workspace-prefixed paths or absolute paths.
@@ -47,7 +48,7 @@ AST server smoke test (requires a debug build):
 cargo test -p cortexast mcp_stdio_smoke
 ```
 
-Full MCP gateway smoke test (builds and exercises all 13 tools end-to-end):
+Full MCP gateway smoke test (builds and exercises all 17 tools end-to-end):
 
 ```bash
 cargo test -p cortex-mcp full_tool_smoke_and_hot_reload
@@ -58,11 +59,12 @@ cargo test -p cortex-mcp full_tool_smoke_and_hot_reload
 `full_tool_smoke_and_hot_reload` builds the release binary and runs a
 comprehensive integration harness that validates:
 
-- the active 13-tool MCP surface from `tools/list`
+- the active 17-tool MCP surface from `tools/list`
 - AST tool calls through the real MCP transport
+- z4-native tool calls (`cortex_z4_reg_reader`, `cortex_z4_hex_bridge`, `cortex_z4_unit_scan`)
 - multi-root `initialize.workspaceFolders` handling plus `workspace_topology`
 - array-based `target_dirs` flows for workspace-aware AST calls
-- ACT tool calls through the real MCP transport, including workspace-prefixed path routing
+- ACT tool calls through the real MCP transport, including workspace-prefixed path routing and `cortex_z4_atomic_sync`
 - filesystem patch semantics including `patch_action`
 - supervisor-based `cortex_mcp_hot_reload`
 

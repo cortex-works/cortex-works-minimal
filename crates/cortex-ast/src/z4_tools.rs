@@ -28,7 +28,8 @@ pub struct RegistryEntry {
     pub id: u64,
     pub class: u64,
     pub class_label: &'static str,
-    pub name_len: usize,
+    pub hash: u64,
+    pub path_len: usize,
     pub path: String,
 }
 
@@ -130,6 +131,15 @@ fn registry_class_label(class: u64, path: &str) -> &'static str {
     }
 }
 
+fn decode_registry_path(hash: u64, encoded: &[u8]) -> String {
+    let shift = ((hash & 0x7f) as u8).wrapping_add(33);
+    let decoded = encoded
+        .iter()
+        .map(|byte| byte.wrapping_add(shift))
+        .collect::<Vec<_>>();
+    String::from_utf8_lossy(&decoded).trim().to_string()
+}
+
 fn header_span(
     bytes: &[u8],
     full_magic: &'static [u8],
@@ -186,20 +196,48 @@ pub fn parse_registry_artifact(path: &Path, bytes: &[u8]) -> Result<RegistryArti
             let record_offset = cursor;
             let id = u64::from_le_bytes(bytes[cursor..cursor + 8].try_into().unwrap());
             let class = u64::from_le_bytes(bytes[cursor + 8..cursor + 16].try_into().unwrap());
-            let name_len =
-                u64::from_le_bytes(bytes[cursor + 16..cursor + 24].try_into().unwrap()) as usize;
-            cursor += 24;
+            let hash = u64::from_le_bytes(bytes[cursor + 16..cursor + 24].try_into().unwrap());
 
-            if cursor + name_len > bytes.len() {
-                return Err(anyhow!(
-                    "Invalid name length 0x{name_len:x} at offset 0x{record_offset:x} in {}",
-                    path.display()
-                ));
-            }
-
-            let raw_path = &bytes[cursor..cursor + name_len];
-            let entry_path = String::from_utf8_lossy(raw_path).trim().to_string();
-            cursor += name_len;
+            let (entry_path, path_len, next_cursor) = if cursor + 32 <= bytes.len() {
+                let path_len =
+                    u64::from_le_bytes(bytes[cursor + 24..cursor + 32].try_into().unwrap()) as usize;
+                let path_start = cursor + 32;
+                let path_end = path_start.saturating_add(path_len);
+                if path_len > 0 && path_end <= bytes.len() {
+                    (decode_registry_path(hash, &bytes[path_start..path_end]), path_len, path_end)
+                } else {
+                    let name_len = hash as usize;
+                    let path_start = cursor + 24;
+                    let path_end = path_start.saturating_add(name_len);
+                    if path_end > bytes.len() {
+                        return Err(anyhow!(
+                            "Invalid name length 0x{name_len:x} at offset 0x{record_offset:x} in {}",
+                            path.display()
+                        ));
+                    }
+                    (
+                        String::from_utf8_lossy(&bytes[path_start..path_end]).trim().to_string(),
+                        name_len,
+                        path_end,
+                    )
+                }
+            } else {
+                let name_len = hash as usize;
+                let path_start = cursor + 24;
+                let path_end = path_start.saturating_add(name_len);
+                if path_end > bytes.len() {
+                    return Err(anyhow!(
+                        "Invalid name length 0x{name_len:x} at offset 0x{record_offset:x} in {}",
+                        path.display()
+                    ));
+                }
+                (
+                    String::from_utf8_lossy(&bytes[path_start..path_end]).trim().to_string(),
+                    name_len,
+                    path_end,
+                )
+            };
+            cursor = next_cursor;
 
             if entry_path.is_empty() {
                 continue;
@@ -210,7 +248,8 @@ pub fn parse_registry_artifact(path: &Path, bytes: &[u8]) -> Result<RegistryArti
                 id,
                 class,
                 class_label: registry_class_label(class, &entry_path),
-                name_len,
+                hash,
+                path_len,
                 path: normalize_rel_path(&entry_path),
             });
         }
@@ -309,12 +348,13 @@ fn render_registry_table(path: &Path, artifact: &RegistryArtifact, max_entries: 
             ));
             for entry in entries.iter().take(max_entries) {
                 out.push_str(&format!(
-                    "offset=0x{:x} id=0x{:x} class=0x{:x}({}) len=0x{:x} path={}\n",
+                    "offset=0x{:x} id=0x{:x} class=0x{:x}({}) hash=0x{:x} len=0x{:x} path={}\n",
                     entry.offset,
                     entry.id,
                     entry.class,
                     entry.class_label,
-                    entry.name_len,
+                    entry.hash,
+                    entry.path_len,
                     entry.path,
                 ));
             }
@@ -809,8 +849,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_real_z4_registry_records() {
-        let bytes = b"Z4REG001K\0\0\0\0\0\0\0\x86\x29\xb2\x04\0\0\0\0\x03\0\0\0\0\0\0\0\x08\0\0\0\0\0\0\0alloc.z4";
+    fn parses_hashed_z4_registry_records() {
+        let bytes = b"Z4REG001K\0\0\0\0\0\0\0\x86\x29\xb2\x04\0\0\0\0\x03\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\x08\0\0\0\0\0\0\0\x40\x4b\x4b\x4e\x42\x0d\x59\x13";
         let artifact = parse_registry_artifact(Path::new("z4.reg"), bytes).expect("registry parse");
 
         match artifact {
@@ -819,6 +859,27 @@ mod tests {
                 assert_eq!(entries[0].offset, 0x10);
                 assert_eq!(entries[0].id, 0x04b22986);
                 assert_eq!(entries[0].class_label, "source");
+                assert_eq!(entries[0].hash, 0);
+                assert_eq!(entries[0].path_len, 8);
+                assert_eq!(entries[0].path, "alloc.z4");
+            }
+            _ => panic!("expected registry artifact"),
+        }
+    }
+
+    #[test]
+    fn parses_legacy_z4_registry_records() {
+        let bytes = b"Z4REG001K\0\0\0\0\0\0\0\x86\x29\xb2\x04\0\0\0\0\x03\0\0\0\0\0\0\0\x08\0\0\0\0\0\0\0alloc.z4";
+        let artifact = parse_registry_artifact(Path::new("z4.reg"), bytes).expect("legacy registry parse");
+
+        match artifact {
+            RegistryArtifact::Registry { entries, .. } => {
+                assert_eq!(entries.len(), 1);
+                assert_eq!(entries[0].offset, 0x10);
+                assert_eq!(entries[0].id, 0x04b22986);
+                assert_eq!(entries[0].class_label, "source");
+                assert_eq!(entries[0].hash, 8);
+                assert_eq!(entries[0].path_len, 8);
                 assert_eq!(entries[0].path, "alloc.z4");
             }
             _ => panic!("expected registry artifact"),

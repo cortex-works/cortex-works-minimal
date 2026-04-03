@@ -160,7 +160,7 @@ fn act_schemas() -> Vec<Value> {
         // ── Batch Execute (Meta-Tool) ─────────────────────────────────────
         json!({
             "name": "cortex_act_batch_execute",
-            "description": "Execute multiple Cortex tool calls in one round-trip and return a JSON BatchSummary object. Operations run sequentially, not in parallel. Use this for short workflows such as explore+edit+verify or several independent reads that do not need separate round-trips.\n\n• Supports all 14 active Cortex tools as operation tool_name values. If you include cortex_mcp_hot_reload, make it the LAST operation because it restarts the worker.\n• Nesting cortex_act_batch_execute inside itself is not allowed.\n• Each operation result includes index, tool_name, success, output, output_chars, and truncated.\n• Omit parameters when a tool does not need any; it defaults to an empty object.\n• Use fail_fast=true when later operations depend on earlier ones succeeding.",
+            "description": "Execute multiple Cortex tool calls in one round-trip and return a JSON BatchSummary object. Operations run sequentially, not in parallel. Use this for short workflows such as explore+edit+verify or several independent reads that do not need separate round-trips.\n\n• Supports all 17 active Cortex tools as operation tool_name values. If you include cortex_mcp_hot_reload, make it the LAST operation because it restarts the worker.\n• Nesting cortex_act_batch_execute inside itself is not allowed.\n• Each operation result includes index, tool_name, success, output, output_chars, and truncated.\n• Omit parameters when a tool does not need any; it defaults to an empty object.\n• Use fail_fast=true when later operations depend on earlier ones succeeding.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -217,6 +217,21 @@ fn act_schemas() -> Vec<Value> {
                 "properties": {
                     "reason": { "type": "string", "description": "Optional reason string for tracing logs." }
                 }
+            }
+        }),
+        json!({
+            "name": "cortex_z4_atomic_sync",
+            "description": "Stage explicit paths, enforce z4 machine-surface hygiene, run z4 validation, then create a focused git commit using a required hex phase id. Use this after z4 edits when you want commit-locked hand behavior without sweeping unrelated repo changes into the commit.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "cwd": { "type": "string", "description": "Repo-relative, workspace-prefixed (multi-root), or absolute path inside the target git repository. Defaults to the primary workspace root." },
+                    "paths": { "type": "array", "items": { "type": "string" }, "description": "Explicit files or directories to stage and commit. Only these paths are included in the atomic sync." },
+                    "phase_id": { "type": "string", "description": "Required hex phase id for the commit message, e.g. '0x16ab1d44'." },
+                    "summary": { "type": "string", "description": "Required short ASCII commit summary appended after the hex phase id." },
+                    "purge_untracked": { "type": "boolean", "description": "When true, run git clean -fd limited to the same pathspecs after a successful commit.", "default": false }
+                },
+                "required": ["paths", "phase_id", "summary"]
             }
         }),
         // ── File System God (write / patch / mkdir / delete / rename / move / copy) ──

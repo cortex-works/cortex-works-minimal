@@ -1,3 +1,4 @@
+pub mod atomic_sync;
 pub mod batch_executor;
 pub mod data_editor;
 pub mod dispatch;

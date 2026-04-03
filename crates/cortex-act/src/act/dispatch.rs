@@ -239,6 +239,13 @@ pub fn execute_single(
             let (command, effective_cwd, timeout_secs): (String, Option<String>, u64) = if run_diag {
                 let root = resolved_cwd.as_deref().unwrap_or(default_cwd.as_str());
                 let base = std::path::Path::new(root);
+                if cortexast::config::load_config(base).z4
+                    && base.join("z4c").exists()
+                    && base.join("build/compiler.filelist").exists()
+                {
+                    return cortexast::inspector::run_diagnostics(base)
+                        .map_err(|e| format!("cortex_act_shell_exec failed: {}", e));
+                }
                 let cmd = if base.join("Cargo.toml").exists() {
                     // `cargo check` writes diagnostics to stderr; redirect to stdout so
                     // the combined output stream captures everything on all platforms.
@@ -319,6 +326,9 @@ pub fn execute_single(
         "cortex_mcp_hot_reload" => crate::act::hot_reload::run(args)
             .map_err(|e| format!("cortex_mcp_hot_reload failed: {e}")),
 
+        "cortex_z4_atomic_sync" => crate::act::atomic_sync::run(args, workspace_roots)
+            .map_err(|e| format!("cortex_z4_atomic_sync failed: {e}")),
+
         // ── Safe FS operations ─────────────────────────────────
         "cortex_fs_manage" => crate::act::fs_manage::run(args, workspace_roots)
             .map_err(|e| format!("cortex_fs_manage failed: {e}")),
@@ -327,7 +337,7 @@ pub fn execute_single(
             "Unknown tool: '{}'. Available: cortex_act_edit_ast, cortex_fs_manage, \
              cortex_act_edit_data_graph, cortex_act_edit_markup, cortex_act_sql_surgery, \
              cortex_act_shell_exec, cortex_act_batch_execute, \
-             cortex_search_exact, cortex_mcp_hot_reload",
+             cortex_search_exact, cortex_mcp_hot_reload, cortex_z4_atomic_sync",
             other
         )),
     }

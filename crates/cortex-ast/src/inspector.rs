@@ -7,6 +7,7 @@ use tree_sitter::{Language, Node, Parser, Query, QueryCursor, StreamingIterator}
 
 use crate::config::load_config;
 use crate::universal::{Z4LanguageDriver, render_universal_skeleton};
+use crate::z4_tools::{RegistryAliases, is_machine_visible_path};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Symbol {
@@ -3341,12 +3342,36 @@ pub fn repo_map(target_dir: &Path) -> Result<String> {
     repo_map_with_filter(&[target_dir.to_path_buf()], None, None, false, &[])
 }
 
+#[derive(Debug, Default, Clone)]
+pub struct RepoMapRenderOptions {
+    pub z4_machine_only: bool,
+    pub registry_aliases: RegistryAliases,
+}
+
 pub fn repo_map_with_filter(
     target_dirs: &[PathBuf],
     search_filter: Option<&str>,
     max_chars: Option<usize>,
     ignore_gitignore: bool,
     exclude_dirs: &[String],
+) -> Result<String> {
+    repo_map_with_render_options(
+        target_dirs,
+        search_filter,
+        max_chars,
+        ignore_gitignore,
+        exclude_dirs,
+        None,
+    )
+}
+
+pub(crate) fn repo_map_with_render_options(
+    target_dirs: &[PathBuf],
+    search_filter: Option<&str>,
+    max_chars: Option<usize>,
+    ignore_gitignore: bool,
+    exclude_dirs: &[String],
+    render_options: Option<&RepoMapRenderOptions>,
 ) -> Result<String> {
     if target_dirs.is_empty() {
         return Ok("*(no target directories requested)*".to_string());
@@ -3359,6 +3384,7 @@ pub fn repo_map_with_filter(
             max_chars,
             ignore_gitignore,
             exclude_dirs,
+            render_options,
         );
     }
 
@@ -3378,6 +3404,7 @@ pub fn repo_map_with_filter(
             max_chars,
             ignore_gitignore,
             exclude_dirs,
+            render_options,
         )?;
         let chunk = format!("## {}\n{}\n\n", label, section);
         if out.len() + chunk.len() > max_chars_total {
@@ -3404,6 +3431,7 @@ fn repo_map_single_with_filter(
     max_chars: Option<usize>,
     ignore_gitignore: bool,
     exclude_dirs: &[String],
+    render_options: Option<&RepoMapRenderOptions>,
 ) -> Result<String> {
     use ignore::WalkBuilder;
     use std::collections::{BTreeMap, BTreeSet, HashSet};
@@ -3457,6 +3485,10 @@ fn repo_map_single_with_filter(
 
     let cfg_lock = language_config().read().unwrap();
     let cfg = &*cfg_lock;
+    let z4_machine_only = render_options
+        .map(|options| options.z4_machine_only)
+        .unwrap_or(false);
+    let registry_aliases = render_options.map(|options| &options.registry_aliases);
     let search_tokens: Vec<String> = search_filter
         .unwrap_or("")
         .split('|')
@@ -3467,16 +3499,18 @@ fn repo_map_single_with_filter(
 
     // Pass 1: collect supported candidates + diagnostics without reading file contents.
     // Then apply search_filter with optional symbol-aware matching (only for small folders).
-    let mut by_dir_files: BTreeMap<String, Vec<(String, PathBuf)>> = BTreeMap::new();
+    let mut by_dir_files: BTreeMap<String, Vec<(String, String, PathBuf)>> = BTreeMap::new();
     let mut unique_dirs: BTreeSet<String> = BTreeSet::new();
 
     let mut kept_source_files: usize = 0;
     let mut dropped_by_unsupported_lang: usize = 0;
     let mut dropped_by_search_filter: usize = 0;
+    let mut dropped_by_machine_mask: usize = 0;
 
     let mut sample_dropped: Vec<String> = Vec::new();
     let mut sample_unsupported: Vec<String> = Vec::new();
     let mut sample_filtered_out: Vec<String> = Vec::new();
+    let mut sample_masked_out: Vec<String> = Vec::new();
     let mut filtered_paths: HashSet<String> = HashSet::new();
 
     let mut filtered_file_count: usize = 0;
@@ -3517,6 +3551,14 @@ fn repo_map_single_with_filter(
             .parent()
             .map(|p| p.to_string_lossy().replace('\\', "/"))
             .unwrap_or_default();
+
+        if z4_machine_only && !is_machine_visible_path(path) {
+            dropped_by_machine_mask += 1;
+            if sample_masked_out.len() < 5 {
+                sample_masked_out.push(rel_path.clone());
+            }
+            continue;
+        }
 
         let z4_candidate = Z4LanguageDriver::is_analysis_candidate(path);
 
@@ -3575,7 +3617,7 @@ fn repo_map_single_with_filter(
         by_dir_files
             .entry(dir_rel)
             .or_default()
-            .push((filename, abs_path));
+            .push((rel_path, filename, abs_path));
     }
 
     // Compute gitignore/ignore-filter drops by comparing against an unfiltered walk.
@@ -3650,6 +3692,13 @@ fn repo_map_single_with_filter(
         sample_dropped.push(p);
     }
 
+    for p in sample_masked_out {
+        if sample_dropped.len() >= 5 {
+            break;
+        }
+        sample_dropped.push(p);
+    }
+
     let mut out = String::new();
     let root_name = abs_dir
         .file_name()
@@ -3684,17 +3733,26 @@ fn repo_map_single_with_filter(
         } else {
             String::new()
         };
+        let z4_mask_hint = if z4_machine_only {
+            format!(
+                "\n• z4 machine-only filter is active and masked 0x{:x} prose/config files.",
+                dropped_by_machine_mask
+            )
+        } else {
+            String::new()
+        };
         return Err(anyhow!(
             "{}Error: 0 supported source files found in '{}'.\n\
 Diagnostics:\n\
 • Ensure the path is correct relative to the repo root.\n\
 • If files exist but are ignored, try again with `ignore_gitignore`: true.\n\
 • If the repo uses languages/extensions not yet supported, they will be skipped.\n\
-• If `search_filter` was set, it may have excluded everything — try without it.{}\n\
+• If `search_filter` was set, it may have excluded everything — try without it.{}{}\n\
 Supported extensions include: rs, ts, tsx, js, jsx, py, go.",
             regex_note,
             target_dir.display(),
-            filter_hint
+            filter_hint,
+            z4_mask_hint
         ));
     }
 
@@ -3757,10 +3815,11 @@ Supported extensions include: rs, ts, tsx, js, jsx, py, go.",
 
     let dropped_total = dropped_by_gitignore_or_error
         .saturating_add(dropped_by_unsupported_lang)
-        .saturating_add(dropped_by_search_filter);
+        .saturating_add(dropped_by_search_filter)
+        .saturating_add(dropped_by_machine_mask);
     push(&format!("{root_name}/   ({kept_source_files} files)\n"));
     push(&format!(
-        "> 📊 Scanned: {scanned_total} items | Kept Source Files: {kept_source_files} | Dropped: {dropped_total} (ignored/errors: {dropped_by_gitignore_or_error}, unsupported: {dropped_by_unsupported_lang}, filtered_out: {dropped_by_search_filter})\n"
+        "> 📊 Scanned: {scanned_total} items | Kept Source Files: {kept_source_files} | Dropped: {dropped_total} (ignored/errors: {dropped_by_gitignore_or_error}, unsupported: {dropped_by_unsupported_lang}, filtered_out: {dropped_by_search_filter}, masked: {dropped_by_machine_mask})\n"
     ));
     if !sample_dropped.is_empty() {
         let joined = sample_dropped
@@ -3769,6 +3828,11 @@ Supported extensions include: rs, ts, tsx, js, jsx, py, go.",
             .collect::<Vec<_>>()
             .join(", ");
         push(&format!("> 🗑️ Sample dropped files: {joined}\n"));
+    }
+    if z4_machine_only {
+        push(
+            "> ⚙️ Z4 machine-only filter active. Prose/config files are hidden and registry aliases are preferred when available.\n",
+        );
     }
     push("\n");
 
@@ -3806,12 +3870,15 @@ Supported extensions include: rs, ts, tsx, js, jsx, py, go.",
         }
         Disclosure::FilesOnly => {
             for (dir_rel, mut files) in by_dir_files {
-                files.sort_by(|a, b| a.0.cmp(&b.0));
+                files.sort_by(|a, b| a.1.cmp(&b.1));
                 if !dir_rel.is_empty() && !push(&format!("\n{dir_rel}/\n")) {
                     break;
                 }
-                for (filename, _abs) in files {
-                    if !push(&format!("  {filename}\n")) {
+                for (rel_path, filename, _abs) in files {
+                    let display_name = registry_aliases
+                        .and_then(|aliases| aliases.display_name(&rel_path, &filename))
+                        .unwrap_or(filename.clone());
+                    if !push(&format!("  {display_name}\n")) {
                         break;
                     }
                 }
@@ -3821,13 +3888,16 @@ Supported extensions include: rs, ts, tsx, js, jsx, py, go.",
         Disclosure::Deep => {
             // Deep mode: read files + extract symbols.
             for (dir_rel, mut files) in by_dir_files {
-                files.sort_by(|a, b| a.0.cmp(&b.0));
+                files.sort_by(|a, b| a.1.cmp(&b.1));
                 if !dir_rel.is_empty() && !push(&format!("\n{dir_rel}/\n")) {
                     break;
                 }
 
-                for (filename, abs_file) in files {
-                    if !push(&format!("  {filename}\n")) {
+                for (rel_path, filename, abs_file) in files {
+                    let display_name = registry_aliases
+                        .and_then(|aliases| aliases.display_name(&rel_path, &filename))
+                        .unwrap_or(filename.clone());
+                    if !push(&format!("  {display_name}\n")) {
                         break;
                     }
 

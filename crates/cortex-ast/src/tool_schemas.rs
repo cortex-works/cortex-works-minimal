@@ -5,6 +5,9 @@ pub fn all_tool_schemas() -> Vec<Value> {
         code_explorer_schema(),
         symbol_analyzer_schema(),
         chronos_schema(),
+        z4_reg_reader_schema(),
+        z4_hex_bridge_schema(),
+        z4_unit_scan_schema(),
         crate::grammar_manager::tool_schema(),
     ]
 }
@@ -100,6 +103,65 @@ pub fn chronos_schema() -> Value {
     })
 }
 
+pub fn z4_reg_reader_schema() -> Value {
+    json!({
+        "name": "cortex_z4_reg_reader",
+        "description": "Read z4.reg, .filelist, or .project.z4 artifacts and emit a compact table or JSON summary with slot/id, byte offset, and resolved path. Use this instead of ad-hoc hex dumps when you need a machine-facing view of z4 registry state.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "repoPath": { "type": "string", "description": "Absolute repo root when you want to pin the lookup to one workspace root." },
+                "target_project": { "type": "string", "description": "Cross-project: ID or abs path. Overrides repoPath." },
+                "path": { "type": "string", "description": "Optional path to z4.reg, .filelist, or .project.z4. Defaults to z4.reg under the repo root when omitted." },
+                "output_format": { "type": "string", "enum": ["table", "json"], "description": "table: low-token text table. json: structured machine-readable output.", "default": "table" },
+                "max_entries": { "type": "integer", "description": "Maximum number of records to emit. Default 64." }
+            }
+        }
+    })
+}
+
+pub fn z4_hex_bridge_schema() -> Value {
+    json!({
+        "name": "cortex_z4_hex_bridge",
+        "description": "Decode z4 DATA/DEFINE DOC hex strings into compact escaped text so agents can understand embedded constants without dumping prose. Accept either a raw doc_hex literal or scan a z4 source file, optionally scoped to one symbol.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "repoPath": { "type": "string", "description": "Absolute repo root when you want to pin the lookup to one workspace root." },
+                "target_project": { "type": "string", "description": "Cross-project: ID or abs path. Overrides repoPath." },
+                "path": { "type": "string", "description": "Path to a .z4 source file. Required unless doc_hex is provided." },
+                "symbol_name": { "type": "string", "description": "Optional symbol scope when path is provided. Limits decoding to DOC literals inside that symbol range." },
+                "doc_hex": { "type": "string", "description": "Optional raw DOC literal such as '0x41444400'. When present, path is not required." },
+                "max_entries": { "type": "integer", "description": "Maximum number of decoded DOC rows to emit when scanning a file. Default 32." }
+            }
+        }
+    })
+}
+
+pub fn z4_unit_scan_schema() -> Value {
+    json!({
+        "name": "cortex_z4_unit_scan",
+        "description": "Scan z4 build units from .filelist or .project.z4 catalogs. Use build_units for a compact unit-to-file map, or rename_guard to see whether a symbol is isolated to one build unit or collides across units.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["build_units", "rename_guard"],
+                    "description": "build_units: render build-unit membership from .filelist/.project.z4 catalogs. rename_guard: summarize which units define/use a z4 symbol before broad rename work."
+                },
+                "repoPath": { "type": "string", "description": "Absolute repo root when you want to pin the scan to one workspace root." },
+                "target_project": { "type": "string", "description": "Cross-project: ID or abs path. Overrides repoPath." },
+                "path": { "type": "string", "description": "Optional path to one .filelist/.project.z4 catalog or a directory to scan. When omitted, the repo is scanned for build-unit catalogs." },
+                "symbol_name": { "type": "string", "description": "Required for action=rename_guard. Symbol to analyze across discovered build units." },
+                "max_units": { "type": "integer", "description": "Maximum number of build units to emit. Default 32." },
+                "max_entries": { "type": "integer", "description": "Maximum number of file entries to show per unit when action=build_units. Default 16." }
+            },
+            "required": ["action"]
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -115,6 +177,9 @@ mod tests {
             "cortex_code_explorer".to_string(),
             "cortex_symbol_analyzer".to_string(),
             "cortex_chronos".to_string(),
+            "cortex_z4_reg_reader".to_string(),
+            "cortex_z4_hex_bridge".to_string(),
+            "cortex_z4_unit_scan".to_string(),
             "cortex_manage_ast_languages".to_string(),
         ]);
     }

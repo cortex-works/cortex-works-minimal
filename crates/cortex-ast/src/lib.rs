@@ -22,3 +22,4 @@ pub mod slicer;
 pub mod universal;
 pub mod workspace;
 pub mod xml_builder;
+pub mod z4_tools;

@@ -774,9 +774,12 @@ impl Z4LanguageDriver {
             .and_then(|name| name.to_str())
             .unwrap_or("")
             .to_ascii_lowercase();
-        let kind = if bytes.starts_with(b"4SMI001") {
+        let kind = if bytes.starts_with(b"Z4SMI001") || bytes.starts_with(b"4SMI001") {
             "Z4_SMI_CATALOG"
-        } else if bytes.starts_with(b"4REG001K") || file_name == "z4.reg" {
+        } else if bytes.starts_with(b"Z4REG001K")
+            || bytes.starts_with(b"4REG001K")
+            || file_name == "z4.reg"
+        {
             "Z4_REGISTRY"
         } else {
             return None;
@@ -972,7 +975,7 @@ mod tests {
 
     #[test]
     fn z4_renders_binary_catalog_summaries() {
-        let bytes = b"4SMI001\0crt0.z4\0fmt.z4\0build/compiler.filelist\0";
+        let bytes = b"Z4SMI001\0\0\0\0\0\0\0\0crt0.z4\0fmt.z4\0build/compiler.filelist\0";
         let summary = Z4LanguageDriver::summarize_catalog(Path::new("build/compiler.filelist"), bytes)
             .expect("catalog summary");
 

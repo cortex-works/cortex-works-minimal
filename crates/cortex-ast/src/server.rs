@@ -7,10 +7,11 @@ use crate::chronos::{checkpoint_symbol, compare_symbol, list_checkpoints};
 use crate::config::load_config;
 use crate::inspector::{
     call_hierarchy, extract_symbols_from_source, find_implementations, find_usages,
-    propagation_checklist, read_symbol_with_options, render_skeleton, repo_map_with_filter,
-    run_diagnostics,
+    propagation_checklist, read_symbol_with_options, render_skeleton,
+    repo_map_with_render_options, run_diagnostics,
 };
 use crate::slicer::slice_to_xml;
+use crate::z4_tools::{RegistryAliases, decode_hex_bridge, read_registry, registry_aliases, unit_scan};
 
 #[derive(Default)]
 pub struct ServerState {
@@ -374,6 +375,7 @@ impl ServerState {
                             Ok(r) => r,
                             Err(e) => return err(e),
                         };
+                        let cfg = load_config(&repo_root);
                         let target_strs = parse_string_array_arg(&args, "target_dirs", "target_dir");
                         if target_strs.is_empty() {
                             return err(
@@ -405,6 +407,14 @@ impl ServerState {
                             .iter()
                             .map(|target_str| resolve_path(&repo_root, &self.workspace_roots, target_str))
                             .collect();
+                        let render_options = crate::inspector::RepoMapRenderOptions {
+                            z4_machine_only: cfg.z4,
+                            registry_aliases: if cfg.z4 {
+                                registry_aliases(&repo_root)
+                            } else {
+                                RegistryAliases::default()
+                            },
+                        };
 
                         // Proactive guardrail: agents often hallucinate paths.
                         for (target_str, target_dir) in target_strs.iter().zip(target_dirs.iter()) {
@@ -435,12 +445,13 @@ You can operate on multiple workspace roots simultaneously. Provide arrays of ta
                             }
                         }
 
-                        match repo_map_with_filter(
+                        match repo_map_with_render_options(
                             &target_dirs,
                             search_filter,
                             max_chars,
                             ignore_gitignore,
                             &exclude_dirs,
+                            Some(&render_options),
                         ) {
                             Ok(s) => ok(s),
                             Err(e) => err(format!("repo_map failed: {e}")),
@@ -1040,6 +1051,80 @@ Call cortex_chronos with action='list_checkpoints' first to see what exists.".to
                 match run_diagnostics(&repo_root) {
                     Ok(s) => ok(s),
                     Err(e) => err(format!("diagnostics failed: {e}")),
+                }
+            }
+
+            "cortex_z4_reg_reader" => {
+                let repo_root = match self.resolve_target_project(&args) {
+                    Ok(r) => r,
+                    Err(e) => return err(e),
+                };
+                let target = args
+                    .get("path")
+                    .and_then(|v| v.as_str())
+                    .map(|path| resolve_path(&repo_root, &self.workspace_roots, path))
+                    .unwrap_or_else(|| repo_root.join("z4.reg"));
+                let output_format = args
+                    .get("output_format")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("table");
+                let max_entries = args
+                    .get("max_entries")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(64) as usize;
+                match read_registry(&target, output_format, max_entries) {
+                    Ok(s) => ok(s),
+                    Err(e) => err(format!("cortex_z4_reg_reader failed: {e}")),
+                }
+            }
+
+            "cortex_z4_hex_bridge" => {
+                let repo_root = match self.resolve_target_project(&args) {
+                    Ok(r) => r,
+                    Err(e) => return err(e),
+                };
+                let path = args
+                    .get("path")
+                    .and_then(|v| v.as_str())
+                    .map(|path| resolve_path(&repo_root, &self.workspace_roots, path));
+                let symbol_name = args.get("symbol_name").and_then(|v| v.as_str());
+                let doc_hex = args.get("doc_hex").and_then(|v| v.as_str());
+                let max_entries = args
+                    .get("max_entries")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(32) as usize;
+                match decode_hex_bridge(path.as_deref(), symbol_name, doc_hex, max_entries) {
+                    Ok(s) => ok(s),
+                    Err(e) => err(format!("cortex_z4_hex_bridge failed: {e}")),
+                }
+            }
+
+            "cortex_z4_unit_scan" => {
+                let repo_root = match self.resolve_target_project(&args) {
+                    Ok(r) => r,
+                    Err(e) => return err(e),
+                };
+                let action = args
+                    .get("action")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .trim();
+                let path = args
+                    .get("path")
+                    .and_then(|v| v.as_str())
+                    .map(|path| resolve_path(&repo_root, &self.workspace_roots, path));
+                let symbol_name = args.get("symbol_name").and_then(|v| v.as_str());
+                let max_units = args
+                    .get("max_units")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(32) as usize;
+                let max_entries = args
+                    .get("max_entries")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(16) as usize;
+                match unit_scan(&repo_root, action, path.as_deref(), symbol_name, max_units, max_entries) {
+                    Ok(s) => ok(s),
+                    Err(e) => err(format!("cortex_z4_unit_scan failed: {e}")),
                 }
             }
 

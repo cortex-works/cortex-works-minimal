@@ -189,6 +189,9 @@ fn full_tool_smoke_and_hot_reload() {
         "cortex_code_explorer",
         "cortex_symbol_analyzer",
         "cortex_chronos",
+        "cortex_z4_reg_reader",
+        "cortex_z4_hex_bridge",
+        "cortex_z4_unit_scan",
         "cortex_manage_ast_languages",
         "cortex_act_edit_ast",
         "cortex_act_edit_data_graph",
@@ -199,11 +202,12 @@ fn full_tool_smoke_and_hot_reload() {
         "cortex_search_exact",
         "cortex_fs_manage",
         "cortex_mcp_hot_reload",
+        "cortex_z4_atomic_sync",
     ]
     .into_iter()
     .map(str::to_string)
     .collect();
-    assert_eq!(tool_set, expected, "tools/list must expose exactly the 14 active tools");
+    assert_eq!(tool_set, expected, "tools/list must expose exactly the 17 active tools");
 
     let languages = client.call_tool("cortex_manage_ast_languages", json!({ "action": "status" }));
     assert_ok(&languages, "rust");

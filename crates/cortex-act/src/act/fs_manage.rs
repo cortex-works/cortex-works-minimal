@@ -113,7 +113,7 @@ fn summarize_process_output(output: &std::process::Output) -> String {
     }
 }
 
-fn maybe_validate_z4_projects(paths: &[PathBuf]) -> Result<Option<String>> {
+pub(crate) fn maybe_validate_z4_projects(paths: &[PathBuf]) -> Result<Option<String>> {
     let mut roots = BTreeSet::new();
 
     for path in paths {

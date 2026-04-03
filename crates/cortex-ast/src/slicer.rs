@@ -81,7 +81,7 @@ pub fn slice_paths_to_xml(
         .iter()
         .map(|e| e.rel_path.to_string_lossy().replace('\\', "/"))
         .collect();
-    let repository_map_text = build_repository_map_text(&all_paths);
+    let repository_map_text = build_repository_map_for_config(&all_paths, cfg);
 
     let mut files_for_xml: Vec<(String, String)> = Vec::new();
     let mut total_bytes: u64 = 64;
@@ -461,6 +461,26 @@ fn build_repository_map_text(all_paths: &[String]) -> String {
     out
 }
 
+fn build_z4_repository_map_text(all_paths: &[String]) -> String {
+    let max_lines: usize = 4000;
+    let max_bytes: usize = 32 * 1024;
+
+    let mut out = String::new();
+    let mut bytes_written: usize = 0;
+
+    for (lines_written, path) in all_paths.iter().enumerate() {
+        if lines_written >= max_lines || bytes_written + path.len() + 1 > max_bytes {
+            out.push_str("...\n");
+            break;
+        }
+        out.push_str(path);
+        out.push('\n');
+        bytes_written += path.len() + 1;
+    }
+
+    out
+}
+
 /// Variant that accepts a pre-formatted multi-section string (used by huge-codebase mode).
 fn build_repository_map_text_raw(sections_text: &str) -> String {
     let max_bytes: usize = 96 * 1024; // slightly larger limit for monorepos
@@ -473,6 +493,22 @@ fn build_repository_map_text_raw(sections_text: &str) -> String {
     }
     out
 }
+
+    fn build_repository_map_for_config(all_paths: &[String], cfg: &Config) -> String {
+        if cfg.z4 {
+            build_z4_repository_map_text(all_paths)
+        } else {
+            build_repository_map_text(all_paths)
+        }
+    }
+
+    fn build_repository_map_raw_for_config(sections_text: &str, cfg: &Config) -> String {
+        if cfg.z4 {
+            sections_text.chars().take(96 * 1024).collect::<String>()
+        } else {
+            build_repository_map_text_raw(sections_text)
+        }
+    }
 
 /// Shared inner function: convert a ranked list of `FileEntry` into context XML.
 fn build_xml_from_entries(
@@ -489,7 +525,7 @@ fn build_xml_from_entries(
         .map(|e| e.rel_path.to_string_lossy().replace('\\', "/"))
         .collect();
     all_paths.sort();
-    let repository_map_text = build_repository_map_text(&all_paths);
+    let repository_map_text = build_repository_map_for_config(&all_paths, cfg);
 
     let mut files_for_xml: Vec<(String, String)> = Vec::new();
     let mut total_bytes: u64 = 64;
@@ -916,7 +952,7 @@ pub fn slice_to_xml_huge(
     // Build repository map: combine all sections.
     let repo_map_text = {
         let combined = repo_map_sections.join("\n");
-        build_repository_map_text_raw(&combined)
+        build_repository_map_raw_for_config(&combined, cfg)
     };
 
     total_bytes = total_bytes

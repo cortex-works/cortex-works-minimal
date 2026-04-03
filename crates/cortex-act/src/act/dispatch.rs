@@ -130,6 +130,12 @@ pub fn execute_single(
             let edits_val = req_arr!("edits");
             let file_path = crate::act::pathing::resolve_path(workspace_roots, file_str);
 
+            if crate::act::fs_manage::is_z4_path(&file_path) {
+                return Err(
+                    "cortex_act_edit_markup is disabled when z4=true. Use cortex_fs_manage so z4c validation can run before the mutation is accepted.".to_string(),
+                );
+            }
+
             let mut edits = Vec::new();
             for item in &edits_val {
                 let target = item
@@ -180,6 +186,12 @@ pub fn execute_single(
             let file_str = req_str!("file");
             let edits_val = req_arr!("edits");
             let file_path = crate::act::pathing::resolve_path(workspace_roots, file_str);
+
+            if crate::act::fs_manage::is_z4_path(&file_path) {
+                return Err(
+                    "cortex_act_sql_surgery is disabled when z4=true. Use cortex_fs_manage so z4c validation can run before the mutation is accepted.".to_string(),
+                );
+            }
 
             let mut edits = Vec::new();
             for item in &edits_val {
@@ -318,5 +330,54 @@ pub fn execute_single(
              cortex_search_exact, cortex_mcp_hot_reload",
             other
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn markup_and_sql_are_blocked_in_z4_mode() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join(".cortexast.json"), r#"{"z4":true}"#)
+            .expect("write config");
+
+        let markdown = dir.path().join("sample.md");
+        std::fs::write(&markdown, "# Intro\n").expect("write markdown");
+        let markdown_err = execute_single(
+            "cortex_act_edit_markup",
+            &json!({
+                "file": markdown.to_string_lossy().to_string(),
+                "edits": [{
+                    "target": "heading:Intro",
+                    "action": "insert_after",
+                    "code": "text"
+                }]
+            }),
+            &[],
+            &[],
+        )
+        .expect_err("markup must be blocked");
+        assert!(markdown_err.contains("disabled when z4=true"));
+
+        let sql = dir.path().join("schema.sql");
+        std::fs::write(&sql, "CREATE TABLE users (id INT);").expect("write sql");
+        let sql_err = execute_single(
+            "cortex_act_sql_surgery",
+            &json!({
+                "file": sql.to_string_lossy().to_string(),
+                "edits": [{
+                    "target": "create_table:users",
+                    "action": "replace",
+                    "code": "CREATE TABLE users (id INT, name TEXT);"
+                }]
+            }),
+            &[],
+            &[],
+        )
+        .expect_err("sql surgery must be blocked");
+        assert!(sql_err.contains("disabled when z4=true"));
     }
 }

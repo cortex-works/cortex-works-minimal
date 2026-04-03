@@ -19,7 +19,9 @@
 
 use anyhow::{Context, Result};
 use serde_json::Value;
-use std::path::PathBuf;
+use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 
 fn extract_paths(args: &Value) -> Vec<String> {
     let mut out = Vec::new();
@@ -92,6 +94,107 @@ pub fn run(args: &Value, workspace_roots: &[PathBuf]) -> Result<String> {
     }
 }
 
+fn append_z4_validation(base: String, paths: &[PathBuf]) -> Result<String> {
+    match maybe_validate_z4_projects(paths)? {
+        Some(summary) if !summary.is_empty() => Ok(format!("{base}\n{summary}")),
+        _ => Ok(base),
+    }
+}
+
+fn summarize_process_output(output: &std::process::Output) -> String {
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+
+    match (stdout.is_empty(), stderr.is_empty()) {
+        (false, false) => format!("{}\n{}", stdout, stderr),
+        (false, true) => stdout,
+        (true, false) => stderr,
+        (true, true) => format!("exit status: {}", output.status),
+    }
+}
+
+fn maybe_validate_z4_projects(paths: &[PathBuf]) -> Result<Option<String>> {
+    let mut roots = BTreeSet::new();
+
+    for path in paths {
+        if let Some(project_root) = find_project_root_path(path) {
+            if cortexast::config::load_config(&project_root).z4 {
+                roots.insert(project_root);
+            }
+        }
+    }
+
+    if roots.is_empty() {
+        return Ok(None);
+    }
+
+    let mut summaries = Vec::new();
+    for project_root in roots {
+        summaries.push(run_z4_validation(&project_root)?);
+    }
+
+    Ok(Some(summaries.join("\n")))
+}
+
+fn run_z4_validation(project_root: &Path) -> Result<String> {
+    let z4c = project_root.join("z4c");
+    let filelist = project_root.join("build/compiler.filelist");
+    if !z4c.exists() || !filelist.exists() {
+        anyhow::bail!(
+            "z4=true validation requires '{}' and '{}'",
+            z4c.display(),
+            filelist.display()
+        );
+    }
+
+    let temp_binary = std::env::temp_dir().join(format!(
+        "cortex-works-z4-validate-{}",
+        std::process::id()
+    ));
+    let compile = Command::new(&z4c)
+        .current_dir(project_root)
+        .arg("-f")
+        .arg(&filelist)
+        .arg("-o")
+        .arg(&temp_binary)
+        .output()
+        .with_context(|| {
+            format!(
+                "Failed to execute {}. z4=true validation requires a host-runnable z4c binary.",
+                z4c.display()
+            )
+        })?;
+    if !compile.status.success() {
+        let summary = summarize_process_output(&compile);
+        let _ = std::fs::remove_file(&temp_binary);
+        anyhow::bail!(
+            "z4c compile validation failed for '{}': {}",
+            project_root.display(),
+            summary
+        );
+    }
+
+    let run = Command::new(&temp_binary)
+        .current_dir(project_root)
+        .output()
+        .with_context(|| {
+            format!(
+                "Failed to execute compiled validation artifact '{}'",
+                temp_binary.display()
+            )
+        })?;
+    let _ = std::fs::remove_file(&temp_binary);
+    if !run.status.success() {
+        anyhow::bail!(
+            "z4c runtime validation failed for '{}': {}",
+            project_root.display(),
+            summarize_process_output(&run)
+        );
+    }
+
+    Ok(format!("z4c validation ok: {}", project_root.display()))
+}
+
 // ── write ─────────────────────────────────────────────────────────────────────
 
 fn handle_write(args: &Value, workspace_roots: &[PathBuf]) -> Result<String> {
@@ -118,7 +221,10 @@ fn handle_write(args: &Value, workspace_roots: &[PathBuf]) -> Result<String> {
     let project = find_project_root(&path);
     crate::fire_index_modified(project, path.to_string_lossy().into_owned());
 
-    Ok(format!("Written {} bytes to `{}`", content.len(), raw_path))
+    append_z4_validation(
+        format!("Written {} bytes to `{}`", content.len(), raw_path),
+        std::slice::from_ref(&path),
+    )
 }
 
 // ── patch (.env / .ini / kv) ─────────────────────────────────────────────────
@@ -163,8 +269,17 @@ fn handle_patch(args: &Value, workspace_roots: &[PathBuf]) -> Result<String> {
 
     match patch_type {
         "env" | "ini" | "kv" => {
-            crate::act::env_patcher::patch_env(&file, action, target, value_as_string.as_deref())
-                .map_err(|e| anyhow::anyhow!("patch({patch_type}) failed: {}", e))
+            let result = crate::act::env_patcher::patch_env(
+                &file,
+                action,
+                target,
+                value_as_string.as_deref(),
+            )
+            .map_err(|e| anyhow::anyhow!("patch({patch_type}) failed: {}", e))?;
+            let file_path = PathBuf::from(&file);
+            let project = find_project_root(&file_path);
+            crate::fire_index_modified(project, file.clone());
+            append_z4_validation(result, std::slice::from_ref(&file_path))
         }
         other => Err(anyhow::anyhow!(
             "Unknown patch type: '{}'. Use: env | ini | kv",
@@ -183,6 +298,7 @@ fn handle_mkdir(args: &Value, workspace_roots: &[PathBuf]) -> Result<String> {
 
     let mut created = 0usize;
     let mut failed: Vec<String> = Vec::new();
+    let mut created_paths: Vec<PathBuf> = Vec::new();
 
     for raw_path in &paths {
         let path = crate::act::pathing::resolve_path(workspace_roots, raw_path);
@@ -193,6 +309,7 @@ fn handle_mkdir(args: &Value, workspace_roots: &[PathBuf]) -> Result<String> {
             Ok(_) => {
                 tracing::info!("[fs_manage] Created directory: {}", display_path);
                 created += 1;
+                created_paths.push(path);
             }
             Err(e) => {
                 failed.push(format!("'{}' ({})", display_path, e));
@@ -200,16 +317,18 @@ fn handle_mkdir(args: &Value, workspace_roots: &[PathBuf]) -> Result<String> {
         }
     }
 
-    if failed.is_empty() {
-        Ok(format!("Successfully created {} paths.", created))
+    let base = if failed.is_empty() {
+        format!("Successfully created {} paths.", created)
     } else {
-        Ok(format!(
+        format!(
             "Successfully created {} paths. Failed to create {} path(s): [{}]",
             created,
             failed.len(),
             failed.join(", ")
-        ))
-    }
+        )
+    };
+
+    append_z4_validation(base, &created_paths)
 }
 
 // ── delete ────────────────────────────────────────────────────────────────────
@@ -248,6 +367,7 @@ fn handle_delete(args: &Value, workspace_roots: &[PathBuf]) -> Result<String> {
 
     let mut deleted = 0usize;
     let mut failed: Vec<String> = Vec::new();
+    let mut deleted_paths: Vec<PathBuf> = Vec::new();
 
     for raw_path in &paths {
         let path = crate::act::pathing::resolve_path(workspace_roots, raw_path);
@@ -288,21 +408,24 @@ fn handle_delete(args: &Value, workspace_roots: &[PathBuf]) -> Result<String> {
                 let project = find_project_root(&path);
                 crate::fire_tombstone(project, path.to_string_lossy().into_owned());
                 deleted += 1;
+                deleted_paths.push(path);
             }
             Err(e) => failed.push(format!("'{}' ({})", display_path, e)),
         }
     }
 
-    if failed.is_empty() {
-        Ok(format!("Successfully deleted {} paths.", deleted))
+    let base = if failed.is_empty() {
+        format!("Successfully deleted {} paths.", deleted)
     } else {
-        Ok(format!(
+        format!(
             "Successfully deleted {} paths. Failed to delete {} path(s): [{}]",
             deleted,
             failed.len(),
             failed.join(", ")
-        ))
-    }
+        )
+    };
+
+    append_z4_validation(base, &deleted_paths)
 }
 
 // ── rename / move ─────────────────────────────────────────────────────────────
@@ -336,7 +459,10 @@ fn handle_rename(args: &Value, workspace_roots: &[PathBuf]) -> Result<String> {
     crate::fire_tombstone(project.clone(), src.to_string_lossy().into_owned());
     crate::fire_index_modified(project, dst.to_string_lossy().into_owned());
 
-    Ok(format!("Renamed: `{}` → `{}`", src_display, dst_display))
+    append_z4_validation(
+        format!("Renamed: `{}` → `{}`", src_display, dst_display),
+        &[src.clone(), dst.clone()],
+    )
 }
 
 // ── copy ──────────────────────────────────────────────────────────────────────
@@ -368,35 +494,43 @@ fn handle_copy(args: &Value, workspace_roots: &[PathBuf]) -> Result<String> {
     let project = find_project_root(&src);
     crate::fire_index_modified(project, dst.to_string_lossy().into_owned());
 
-    Ok(format!("Copied: `{}` → `{}`", src_display, dst_display))
+    append_z4_validation(
+        format!("Copied: `{}` → `{}`", src_display, dst_display),
+        &[src.clone(), dst.clone()],
+    )
 }
 
 // ── Helper: project root detection ───────────────────────────────────────────
 
 /// Walk upward from `path` to find the first directory containing `.git` or
 /// `.cortexast.json`.  Falls back to the file's parent directory.
-fn find_project_root(path: &std::path::Path) -> String {
+fn find_project_root_path(path: &Path) -> Option<PathBuf> {
     let mut dir = if path.is_file() || !path.exists() {
-        match path.parent() {
-            Some(p) => p.to_path_buf(),
-            None => return String::new(),
-        }
+        path.parent()?.to_path_buf()
     } else {
         path.to_path_buf()
     };
 
     loop {
         if dir.join(".git").exists() || dir.join(".cortexast.json").exists() {
-            return dir.to_string_lossy().to_string();
+            return Some(dir);
         }
         if !dir.pop() {
-            // No marker found — fall back to direct parent.
-            return path
-                .parent()
-                .map(|p| p.to_string_lossy().to_string())
-                .unwrap_or_default();
+            return path.parent().map(|p| p.to_path_buf());
         }
     }
+}
+
+pub(crate) fn is_z4_path(path: &Path) -> bool {
+    find_project_root_path(path)
+        .map(|project_root| cortexast::config::load_config(&project_root).z4)
+        .unwrap_or(false)
+}
+
+fn find_project_root(path: &Path) -> String {
+    find_project_root_path(path)
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -486,5 +620,41 @@ mod tests {
             std::fs::read_to_string(workspace.join("prefixed.txt")).expect("read file"),
             "hello"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_runs_z4_validation_when_enabled() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir_all(dir.path().join("build")).expect("create build dir");
+        std::fs::write(dir.path().join(".cortexast.json"), r#"{"z4":true}"#)
+            .expect("write config");
+        std::fs::write(dir.path().join("build/compiler.filelist"), "main.z4\n")
+            .expect("write compiler filelist");
+
+        let validator = dir.path().join("z4c");
+        std::fs::write(
+            &validator,
+            "#!/bin/sh\nout=\"\"\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = \"-o\" ]; then\n    shift\n    out=\"$1\"\n  fi\n  shift\ndone\ncat <<'EOF' > \"$out\"\n#!/bin/sh\nexit 0\nEOF\nchmod +x \"$out\"\n",
+        )
+        .expect("write validator shim");
+        let mut perms = std::fs::metadata(&validator)
+            .expect("validator metadata")
+            .permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&validator, perms).expect("chmod validator");
+
+        let target = dir.path().join("main.z4");
+        let args = json!({
+            "action": "write",
+            "paths": [target.to_string_lossy().to_string()],
+            "content": "@z4_main: RET\n"
+        });
+
+        let result = run(&args, &[]).expect("z4 write should succeed");
+        assert!(result.contains("Written"));
+        assert!(result.contains("z4c validation ok:"));
     }
 }

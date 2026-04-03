@@ -90,6 +90,8 @@ pub struct Config {
     /// Settings that govern file discovery and exclusion.
     pub scan: ScanConfig,
     pub token_estimator: TokenEstimatorConfig,
+    /// Enable Z4-native regex paths and strict runtime guardrails.
+    pub z4: bool,
     /// When true, generate "skeleton" file content (function bodies pruned) for supported languages.
     pub skeleton_mode: bool,
     /// Settings that govern huge monorepo / multi-service workspace behaviour.
@@ -105,6 +107,7 @@ impl Default for Config {
             output_dir: PathBuf::from(".cortexast"),
             scan: ScanConfig::default(),
             token_estimator: TokenEstimatorConfig::default(),
+            z4: false,
             skeleton_mode: true,
             huge_codebase: HugeCodebaseConfig::default(),
             active_languages: vec![

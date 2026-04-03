@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use tree_sitter::{Language, Node, Parser, Query, QueryCursor, StreamingIterator};
 
-use crate::universal::render_universal_skeleton;
+use crate::universal::{Z4LanguageDriver, render_universal_skeleton};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Symbol {
@@ -498,6 +498,10 @@ pub fn render_skeleton(path: &Path) -> Result<String> {
         return Ok("/* MINIFIED_OR_GENERATED — skipped */\n".to_string());
     }
 
+    if Z4LanguageDriver::handles_path(&abs) {
+        return Ok(Z4LanguageDriver::render_density_map(&source_text));
+    }
+
     let source = source_text.as_bytes();
 
     let mut parser = driver.make_parser(&abs)?;
@@ -524,6 +528,10 @@ pub fn render_skeleton_from_source(path: &Path, source_text: &str) -> Result<Str
     // Safety net.
     if is_minified_or_generated(source_text) {
         return Ok("/* MINIFIED_OR_GENERATED — skipped */\n".to_string());
+    }
+
+    if Z4LanguageDriver::handles_path(&abs) {
+        return Ok(Z4LanguageDriver::render_density_map(source_text));
     }
 
     let cfg = language_config().read().unwrap();
@@ -574,6 +582,10 @@ pub fn try_render_skeleton_from_source(path: &Path, source_text: &str) -> Result
             .context("Failed to get current dir")?
             .join(path)
     };
+
+    if Z4LanguageDriver::handles_path(&abs) {
+        return Ok(Some(Z4LanguageDriver::render_density_map(source_text)));
+    }
 
     let cfg = language_config().read().unwrap();
     let Some(driver) = cfg.driver_for_path(&abs) else {
@@ -1753,14 +1765,24 @@ pub fn analyze_file(path: &Path) -> Result<FileSymbols> {
             .join(path)
     };
 
+    let source_text = std::fs::read_to_string(&abs)
+        .with_context(|| format!("Failed to read {}", abs.display()))?;
+    if Z4LanguageDriver::handles_path(&abs) {
+        let mut symbols = Z4LanguageDriver::extract_symbols(&source_text);
+        symbols.sort_by(|a, b| a.line.cmp(&b.line).then_with(|| a.name.cmp(&b.name)));
+        return Ok(FileSymbols {
+            file: normalize_path_for_output(path),
+            imports: vec![],
+            exports: vec![],
+            symbols,
+        });
+    }
+
     let cfg = language_config().read().unwrap();
     let driver = cfg
         .driver_for_path(&abs)
         .ok_or_else(|| anyhow!("Unsupported file extension: {}", abs.display()))?;
     let language = driver.language_for_path(&abs);
-
-    let source_text = std::fs::read_to_string(&abs)
-        .with_context(|| format!("Failed to read {}", abs.display()))?;
     let source = source_text.as_bytes();
 
     let mut parser = driver.make_parser(&abs)?;
@@ -1809,6 +1831,12 @@ pub fn extract_symbols_from_source(path: &Path, source_text: &str) -> Vec<Symbol
             Err(_) => return vec![],
         }
     };
+
+    if Z4LanguageDriver::handles_path(&abs) {
+        let mut syms = Z4LanguageDriver::extract_symbols(source_text);
+        syms.sort_by(|a, b| a.line.cmp(&b.line));
+        return syms;
+    }
 
     let cfg = language_config().read().unwrap();
     let Some(driver) = cfg.driver_for_path(&abs) else {
@@ -1877,6 +1905,16 @@ pub fn read_symbol_with_options(
         return Err(anyhow!("Binary file — cannot extract symbol"));
     }
     let source_text = String::from_utf8_lossy(&raw).into_owned();
+
+    if Z4LanguageDriver::handles_path(&abs) {
+        return Z4LanguageDriver::read_symbol(
+            &abs,
+            &source_text,
+            symbol_name,
+            skeleton_only,
+            instance_index,
+        );
+    }
 
     let cfg = language_config().read().unwrap();
     let Some(driver) = cfg.driver_for_path(&abs) else {

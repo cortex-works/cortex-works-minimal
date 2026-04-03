@@ -1,3 +1,5 @@
+use crate::config::load_config;
+use crate::universal::Z4LanguageDriver;
 use anyhow::Result;
 use ignore::WalkBuilder;
 use serde_json::Value;
@@ -9,13 +11,14 @@ const MAX_FILES_CAP: usize = 500;
 
 const SUPPORTED_EXTENSIONS: &[&str] = &[
     "rs", "ts", "tsx", "js", "jsx", "py", "go", "java", "cs", "cpp", "c", "h", "hpp",
-    "rb", "php", "dart", "swift", "kt",
+    "rb", "php", "dart", "swift", "kt", "z4",
 ];
 
 #[derive(Default)]
 struct FileSkeleton {
     fns: Vec<String>,
     structs: Vec<String>,
+    z4_summary: Option<String>,
 }
 
 pub fn render_project_skeleton(
@@ -24,6 +27,7 @@ pub fn render_project_skeleton(
     target_dirs: &[PathBuf],
     args: &Value,
 ) -> Result<String> {
+    let cfg = load_config(project_root);
     let max_files = args
         .get("max_files")
         .and_then(|v| v.as_u64())
@@ -103,6 +107,32 @@ pub fn render_project_skeleton(
                 Err(_) => continue,
             };
 
+            if cfg.z4 && Z4LanguageDriver::handles_path(&path) {
+                let summary = Z4LanguageDriver::summarize_file(&source);
+                file_symbols.insert(
+                    rel,
+                    FileSkeleton {
+                        z4_summary: Some(format!(
+                            "labels=0x{:x}, hex_labels=0x{:x}, hex_literals=0x{:x}, doc_hex_rows=0x{:x}, ldpk=0x{:x}, hpk=0x{:x}",
+                            summary.labels,
+                            summary.hex_labels,
+                            summary.hex_literals,
+                            summary.doc_hex_rows,
+                            summary.label_density_per_kib,
+                            summary.hex_density_per_kib,
+                        )),
+                        ..FileSkeleton::default()
+                    },
+                );
+                files_processed += 1;
+
+                if files_processed >= max_files {
+                    break 'targets;
+                }
+
+                continue;
+            }
+
             let symbols = crate::inspector::extract_symbols_from_source(&path, &source);
             if symbols.is_empty() {
                 continue;
@@ -174,15 +204,28 @@ pub fn render_project_skeleton(
         ));
     }
 
-    let mut out = format!(
-        "# Project Skeleton — `{}`\n# Files: {}  (cap: {})\n\n",
-        project_root.display(),
-        files_processed,
-        max_files,
-    );
+    let mut out = if cfg.z4 {
+        format!(
+            "# Z4 Hex-Label Density Map — `{}`\n# Files: {}  (cap: {})\n\n",
+            project_root.display(),
+            files_processed,
+            max_files,
+        )
+    } else {
+        format!(
+            "# Project Skeleton — `{}`\n# Files: {}  (cap: {})\n\n",
+            project_root.display(),
+            files_processed,
+            max_files,
+        )
+    };
 
     for (file, skel) in &file_symbols {
         out.push_str(&format!("{}:\n", file));
+        if let Some(z4_summary) = &skel.z4_summary {
+            out.push_str(&format!("  z4: {{{}}}\n", z4_summary));
+            continue;
+        }
         if !skel.fns.is_empty() {
             out.push_str(&format!("  fn: [{}]\n", skel.fns.join(", ")));
         }

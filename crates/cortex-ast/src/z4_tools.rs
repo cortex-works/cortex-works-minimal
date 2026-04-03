@@ -521,13 +521,28 @@ fn discover_catalogs(search_root: &Path) -> Vec<PathBuf> {
     for entry_result in walker {
         let Ok(entry) = entry_result else { continue };
         let path = entry.path();
-        if path.is_file() && Z4LanguageDriver::is_catalog_path(path) {
+        if path.is_file() && is_build_catalog_path(path) {
             catalogs.push(path.to_path_buf());
         }
     }
 
     catalogs.sort();
     catalogs
+}
+
+fn is_build_catalog_path(path: &Path) -> bool {
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let extension = path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+
+    extension == "filelist" || file_name.ends_with(".project.z4")
 }
 
 fn selected_catalogs(repo_root: &Path, selected_path: Option<&Path>) -> Result<Vec<PathBuf>> {
@@ -543,7 +558,7 @@ fn selected_catalogs(repo_root: &Path, selected_path: Option<&Path>) -> Result<V
             return Ok(catalogs);
         }
 
-        if !Z4LanguageDriver::is_catalog_path(selected_path) {
+        if !is_build_catalog_path(selected_path) {
             return Err(anyhow!(
                 "'path' must point to a .filelist or .project.z4 file, got '{}'",
                 selected_path.display()
@@ -863,5 +878,28 @@ mod tests {
         assert!(rendered.contains("status=single_unit_safe"));
         assert!(rendered.contains("defs=0x1"));
         assert!(rendered.contains("uses=0x1"));
+    }
+
+    #[test]
+    fn rename_guard_without_path_scans_build_catalogs_only() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir_all(dir.path().join("build")).expect("build dir");
+        std::fs::write(
+            dir.path().join("build/compiler.filelist"),
+            b"Z4SMI001\0\0\0\0\0\0\0\0alpha.z4\0",
+        )
+        .expect("catalog");
+        std::fs::write(
+            dir.path().join("z4.reg"),
+            b"Z4REG001K\0\0\0\0\0\0\0\0",
+        )
+        .expect("registry");
+        std::fs::write(dir.path().join("alpha.z4"), "@alpha: RET\n").expect("alpha source");
+
+        let rendered = unit_scan(dir.path(), "rename_guard", None, Some("alpha"), 8, 8)
+            .expect("unit scan");
+
+        assert!(rendered.contains("status=single_unit_safe"));
+        assert!(rendered.contains("catalog=build/compiler.filelist"));
     }
 }

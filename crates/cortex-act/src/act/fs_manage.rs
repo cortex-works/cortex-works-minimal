@@ -113,6 +113,13 @@ fn summarize_process_output(output: &std::process::Output) -> String {
     }
 }
 
+fn is_host_binary_mismatch(text: &str) -> bool {
+    let lowered = text.to_ascii_lowercase();
+    lowered.contains("cannot execute binary file")
+        || lowered.contains("exec format error")
+        || lowered.contains("bad cpu type in executable")
+}
+
 pub(crate) fn maybe_validate_z4_projects(paths: &[PathBuf]) -> Result<Option<String>> {
     let mut roots = BTreeSet::new();
 
@@ -167,6 +174,13 @@ fn run_z4_validation(project_root: &Path) -> Result<String> {
     if !compile.status.success() {
         let summary = summarize_process_output(&compile);
         let _ = std::fs::remove_file(&temp_binary);
+        if is_host_binary_mismatch(&summary) {
+            anyhow::bail!(
+                "z4c compile validation failed for '{}': {}\nHint: z4=true validation requires a host-runnable z4c binary for the current machine.",
+                project_root.display(),
+                summary
+            );
+        }
         anyhow::bail!(
             "z4c compile validation failed for '{}': {}",
             project_root.display(),
@@ -185,10 +199,18 @@ fn run_z4_validation(project_root: &Path) -> Result<String> {
         })?;
     let _ = std::fs::remove_file(&temp_binary);
     if !run.status.success() {
+        let summary = summarize_process_output(&run);
+        if is_host_binary_mismatch(&summary) {
+            anyhow::bail!(
+                "z4c runtime validation failed for '{}': {}\nHint: the compiled validation artifact is not runnable on this host.",
+                project_root.display(),
+                summary
+            );
+        }
         anyhow::bail!(
             "z4c runtime validation failed for '{}': {}",
             project_root.display(),
-            summarize_process_output(&run)
+            summary
         );
     }
 

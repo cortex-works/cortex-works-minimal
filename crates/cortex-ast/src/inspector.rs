@@ -3621,7 +3621,11 @@ fn repo_map_single_with_filter(
     }
 
     // Compute gitignore/ignore-filter drops by comparing against an unfiltered walk.
-    let (scanned_total, dropped_by_gitignore_or_error) = if !ignore_gitignore {
+    let (scanned_total, dropped_by_gitignore_or_error) = if z4_machine_only {
+        let scanned_total = filtered_file_count.saturating_add(filtered_error_count);
+        let dropped_by_gitignore_or_error = filtered_error_count;
+        (scanned_total, dropped_by_gitignore_or_error)
+    } else if !ignore_gitignore {
         let excluded_dir_set_all = excluded_dir_set.clone();
         let walker_all = WalkBuilder::new(&abs_dir)
             .standard_filters(false)
@@ -4670,6 +4674,13 @@ pub fn run_diagnostics(repo_root: &Path) -> Result<String> {
 fn run_z4_diagnostics(repo_root: &Path) -> String {
     use std::process::{Command, Stdio};
 
+    fn is_host_binary_mismatch(stderr: &str) -> bool {
+        let lowered = stderr.to_ascii_lowercase();
+        lowered.contains("cannot execute binary file")
+            || lowered.contains("exec format error")
+            || lowered.contains("bad cpu type in executable")
+    }
+
     let z4c = repo_root.join("z4c");
     let filelist = repo_root.join("build/compiler.filelist");
     let temp_binary = std::env::temp_dir().join(format!(
@@ -4706,6 +4717,14 @@ fn run_z4_diagnostics(repo_root: &Path) -> String {
     let compile_stderr = String::from_utf8_lossy(&compile.stderr).to_string();
     if !compile.status.success() {
         let _ = std::fs::remove_file(&temp_binary);
+        if is_host_binary_mismatch(&compile_stderr) {
+            return format!(
+                "Diagnostics command: `{}`\nExit code: {}\n\n=== STDERR ===\n{}\n\nHint: z4=true needs a host-runnable `./z4c` binary for this repo. The current binary does not match this machine/architecture.\n",
+                command_label,
+                compile.status.code().unwrap_or(-1),
+                compile_stderr.trim()
+            );
+        }
         return format_generic_diagnostics(
             &command_label,
             compile.status.code().unwrap_or(-1),
@@ -4735,6 +4754,16 @@ fn run_z4_diagnostics(repo_root: &Path) -> String {
 
     let run_stdout = String::from_utf8_lossy(&run.stdout).to_string();
     let run_stderr = String::from_utf8_lossy(&run.stderr).to_string();
+    if !run.status.success() && is_host_binary_mismatch(&run_stderr) {
+        return format!(
+            "Diagnostics command: `{}`\nCompile exit code: {}\nRuntime command: `{}`\nRuntime exit code: {}\n\n=== RUNTIME STDERR ===\n{}\n\nHint: the compiled z4 diagnostics artifact is not runnable on this host. Rebuild z4 toolchain artifacts for the local platform.\n",
+            command_label,
+            compile.status.code().unwrap_or(-1),
+            run_command,
+            run.status.code().unwrap_or(-1),
+            run_stderr.trim()
+        );
+    }
     let mut out = String::new();
     out.push_str(&format!("Diagnostics command: `{}`\n", command_label));
     out.push_str(&format!("Compile exit code: {}\n\n", compile.status.code().unwrap_or(-1)));

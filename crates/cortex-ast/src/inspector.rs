@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use tree_sitter::{Language, Node, Parser, Query, QueryCursor, StreamingIterator};
 
+use crate::config::load_config;
 use crate::universal::{Z4LanguageDriver, render_universal_skeleton};
 
 #[derive(Debug, Clone, Serialize)]
@@ -2213,6 +2214,8 @@ pub fn find_usages(target_dir: &Path, symbol_name: &str) -> Result<String> {
     let cfg_lock = language_config().read().unwrap();
     let cfg = &*cfg_lock;
     let mut all_results: Vec<UsageMatch> = Vec::new();
+    let mut saw_z4_file = false;
+    let z4_builtin_query = Z4LanguageDriver::is_builtin_register(symbol_name);
 
     for entry_result in walker {
         let Ok(entry) = entry_result else { continue };
@@ -2222,7 +2225,8 @@ pub fn find_usages(target_dir: &Path, symbol_name: &str) -> Result<String> {
         }
 
         // Only process files with a supported language driver.
-        if cfg.driver_for_path(path).is_none() {
+        let z4_candidate = Z4LanguageDriver::handles_path(path);
+        if cfg.driver_for_path(path).is_none() && !z4_candidate {
             continue;
         }
 
@@ -2236,8 +2240,38 @@ pub fn find_usages(target_dir: &Path, symbol_name: &str) -> Result<String> {
             continue;
         };
 
+        if z4_candidate {
+            saw_z4_file = true;
+        }
+
         // Hot path: fast substring pre-filter before paying the tree-sitter parse cost.
-        if !source_text.contains(symbol_name) {
+        if !source_text.contains(symbol_name)
+            && !source_text.contains(&format!("@{}", symbol_name.trim_start_matches('@')))
+            && !source_text.contains(&format!("%{}", symbol_name.trim_start_matches('%')))
+        {
+            continue;
+        }
+
+        if z4_candidate {
+            if z4_builtin_query {
+                continue;
+            }
+
+            let hits = Z4LanguageDriver::find_usages(source_text, symbol_name);
+            if hits.is_empty() {
+                continue;
+            }
+
+            let text_lines: Vec<&str> = source_text.lines().collect();
+            let display_path = path.to_string_lossy();
+            for hit in hits {
+                all_results.push(UsageMatch {
+                    category: hit.category,
+                    file: display_path.to_string(),
+                    line_1: hit.line_0 + 1,
+                    context: extract_context_lines(&text_lines, hit.line_0 as usize, 2),
+                });
+            }
             continue;
         }
 
@@ -2283,6 +2317,12 @@ pub fn find_usages(target_dir: &Path, symbol_name: &str) -> Result<String> {
     }
 
     if all_results.is_empty() {
+        if saw_z4_file && z4_builtin_query {
+            return Ok(format!(
+                "Skipped built-in z4 register `{}` to avoid register-level noise. Search for a label (`@name`) or named variable (`%name`) instead.",
+                symbol_name
+            ));
+        }
         return Ok(format!(
             "No usages of `{}` found in {}.",
             symbol_name,
@@ -3478,8 +3518,10 @@ fn repo_map_single_with_filter(
             .map(|p| p.to_string_lossy().replace('\\', "/"))
             .unwrap_or_default();
 
+        let z4_candidate = Z4LanguageDriver::is_analysis_candidate(path);
+
         // Track unsupported languages explicitly so agents know why a file is missing.
-        if cfg.driver_for_path(path).is_none() {
+        if cfg.driver_for_path(path).is_none() && !z4_candidate {
             dropped_by_unsupported_lang += 1;
             if sample_unsupported.len() < 5 {
                 sample_unsupported.push(rel_path.clone());
@@ -3789,7 +3831,23 @@ Supported extensions include: rs, ts, tsx, js, jsx, py, go.",
                         break;
                     }
 
-                    let Ok(source_text) = std::fs::read_to_string(&abs_file) else {
+                    let Ok(raw_bytes) = std::fs::read(&abs_file) else {
+                        continue;
+                    };
+                    if raw_bytes.contains(&0u8) {
+                        if let Some(summary) = Z4LanguageDriver::summarize_catalog(&abs_file, &raw_bytes) {
+                            if !push(&format!(
+                                "    [catalog ] {} entries=0x{:x}\n",
+                                summary.kind,
+                                summary.entries.len()
+                            )) {
+                                break;
+                            }
+                        }
+                        continue;
+                    }
+
+                    let Ok(source_text) = String::from_utf8(raw_bytes) else {
                         continue;
                     };
                     let syms = extract_symbols_from_source(&abs_file, &source_text);
@@ -4109,7 +4167,8 @@ pub fn call_hierarchy(target_dir: &Path, symbol_name: &str) -> Result<String> {
         if !path.is_file() {
             continue;
         }
-        if cfg.driver_for_path(path).is_none() {
+        let z4_candidate = Z4LanguageDriver::handles_path(path);
+        if cfg.driver_for_path(path).is_none() && !z4_candidate {
             continue;
         }
 
@@ -4123,6 +4182,48 @@ pub fn call_hierarchy(target_dir: &Path, symbol_name: &str) -> Result<String> {
             continue;
         };
         if !source_text.contains(symbol_name) {
+            continue;
+        }
+
+        let text_lines: Vec<&str> = source_text.lines().collect();
+        let display_path = path.to_string_lossy().to_string();
+
+        if z4_candidate {
+            let syms = Z4LanguageDriver::extract_symbols(source_text);
+
+            for sym in &syms {
+                if sym.name != symbol_name && !sym.name.eq_ignore_ascii_case(symbol_name) {
+                    continue;
+                }
+
+                definitions.push(DefSite {
+                    file: display_path.clone(),
+                    line_1: sym.line + 1,
+                    kind: sym.kind.clone(),
+                });
+
+                for edge in Z4LanguageDriver::collect_outgoing_edges(source_text, sym) {
+                    outgoing_calls.push((
+                        format!("{} [{}]", edge.target, edge.category),
+                        edge.line_0 + 1,
+                        display_path.clone(),
+                    ));
+                }
+            }
+
+            for hit in Z4LanguageDriver::find_usages(source_text, symbol_name)
+                .into_iter()
+                .filter(|hit| matches!(hit.category, "Calls" | "Branches" | "Branch Success" | "Branch Failure"))
+            {
+                let enclosing = syms
+                    .iter()
+                    .filter(|sym| sym.line <= hit.line_0 && hit.line_0 <= sym.line_end)
+                    .min_by_key(|sym| hit.line_0 - sym.line)
+                    .map(|sym| format!("{} {}()", sym.kind, sym.name));
+                let ctx = extract_context_lines(&text_lines, hit.line_0 as usize, 2);
+                callers.push((display_path.clone(), hit.line_0 + 1, enclosing, ctx));
+            }
+
             continue;
         }
 
@@ -4141,9 +4242,6 @@ pub fn call_hierarchy(target_dir: &Path, symbol_name: &str) -> Result<String> {
             continue;
         };
         let root = tree.root_node();
-
-        let text_lines: Vec<&str> = source_text.lines().collect();
-        let display_path = path.to_string_lossy().to_string();
 
         // Extract skeleton (symbol list) for this file — used for definition
         // detection AND for resolving enclosing function context.
@@ -4386,6 +4484,12 @@ pub fn run_diagnostics(repo_root: &Path) -> Result<String> {
             .join(repo_root)
     };
 
+    let cfg = load_config(&abs_root);
+    let has_z4 = cfg.z4 && abs_root.join("z4c").exists() && abs_root.join("build/compiler.filelist").exists();
+    if has_z4 {
+        return Ok(run_z4_diagnostics(&abs_root));
+    }
+
     let has_cargo = abs_root.join("Cargo.toml").exists();
     let has_package_json = abs_root.join("package.json").exists();
     let has_go = abs_root.join("go.mod").exists();
@@ -4491,6 +4595,106 @@ pub fn run_diagnostics(repo_root: &Path) -> Result<String> {
             &stderr,
         ))
     }
+}
+
+fn run_z4_diagnostics(repo_root: &Path) -> String {
+    use std::process::{Command, Stdio};
+
+    let z4c = repo_root.join("z4c");
+    let filelist = repo_root.join("build/compiler.filelist");
+    let temp_binary = std::env::temp_dir().join(format!(
+        "cortexast-z4-diagnostics-{}",
+        std::process::id()
+    ));
+    let command_label = format!(
+        "./z4c -f build/compiler.filelist -o {}",
+        temp_binary.display()
+    );
+
+    let compile = match Command::new(&z4c)
+        .arg("-f")
+        .arg(&filelist)
+        .arg("-o")
+        .arg(&temp_binary)
+        .current_dir(repo_root)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+    {
+        Ok(output) => output,
+        Err(error) => {
+            return format!(
+                "Diagnostics command: `{}`\nLaunch failure: {}\nHint: z4=true requires a host-runnable `{}` binary.\n",
+                command_label,
+                error,
+                z4c.display()
+            )
+        }
+    };
+
+    let compile_stdout = String::from_utf8_lossy(&compile.stdout).to_string();
+    let compile_stderr = String::from_utf8_lossy(&compile.stderr).to_string();
+    if !compile.status.success() {
+        let _ = std::fs::remove_file(&temp_binary);
+        return format_generic_diagnostics(
+            &command_label,
+            compile.status.code().unwrap_or(-1),
+            &compile_stdout,
+            &compile_stderr,
+        );
+    }
+
+    let run_command = temp_binary.display().to_string();
+    let run = match Command::new(&temp_binary)
+        .current_dir(repo_root)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+    {
+        Ok(output) => output,
+        Err(error) => {
+            let _ = std::fs::remove_file(&temp_binary);
+            return format!(
+                "Diagnostics command: `{}`\nRun failure: {}\nHint: the compiled z4 diagnostics artifact could not execute on this host.\n",
+                run_command,
+                error,
+            )
+        }
+    };
+    let _ = std::fs::remove_file(&temp_binary);
+
+    let run_stdout = String::from_utf8_lossy(&run.stdout).to_string();
+    let run_stderr = String::from_utf8_lossy(&run.stderr).to_string();
+    let mut out = String::new();
+    out.push_str(&format!("Diagnostics command: `{}`\n", command_label));
+    out.push_str(&format!("Compile exit code: {}\n\n", compile.status.code().unwrap_or(-1)));
+    if !compile_stdout.trim().is_empty() {
+        out.push_str("=== COMPILE STDOUT ===\n");
+        out.push_str(compile_stdout.trim());
+        out.push_str("\n\n");
+    }
+    if !compile_stderr.trim().is_empty() {
+        out.push_str("=== COMPILE STDERR ===\n");
+        out.push_str(compile_stderr.trim());
+        out.push_str("\n\n");
+    }
+    out.push_str(&format!("Runtime command: `{}`\n", run_command));
+    out.push_str(&format!("Runtime exit code: {}\n\n", run.status.code().unwrap_or(-1)));
+    if run_stdout.trim().is_empty() && run_stderr.trim().is_empty() {
+        out.push_str("No output — z4 diagnostics completed successfully.\n");
+        return out;
+    }
+    if !run_stdout.trim().is_empty() {
+        out.push_str("=== RUNTIME STDOUT ===\n");
+        out.push_str(run_stdout.trim());
+        out.push_str("\n\n");
+    }
+    if !run_stderr.trim().is_empty() {
+        out.push_str("=== RUNTIME STDERR ===\n");
+        out.push_str(run_stderr.trim());
+        out.push('\n');
+    }
+    out
 }
 
 fn format_generic_diagnostics(command: &str, exit_code: i32, stdout: &str, stderr: &str) -> String {

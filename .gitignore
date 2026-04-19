@@ -11,6 +11,8 @@ Cargo.lock            # library crates — lock managed at workspace root only
 node_modules/
 **/node_modules/
 **/*.vsix             # packaged VS Code extensions
+extensions/cortex-works-vscode/*.vsix
+extensions/cortex-works-vscode/resources/sidecars/*/
 
 # ─── Build / distribution outputs ─────────────────────────────────────────
 /dist/

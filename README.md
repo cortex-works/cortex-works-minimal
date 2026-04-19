@@ -117,6 +117,18 @@ cargo build --release -p cortex-mcp
 }
 ```
 
+## VS Code Extension Wrapper
+
+The repository now also includes a VS Code workspace extension wrapper in `extensions/cortex-works-vscode`.
+
+It now does one job cleanly: expose the same 13 Cortex tools through an extension-native bridge instead of a user-configured MCP server entry.
+
+- no extension-only tool names are added
+- the user-facing tool surface stays aligned with `cortex-mcp`
+- the extension runs `cortex-extension-bridge`, which reuses the existing Cortex dispatch directly for lower overhead than the MCP path
+
+See [docs/EXTENSION_ARCH.md](docs/EXTENSION_ARCH.md) for the architecture and packaging model.
+
 ---
 
 ## Recommended Agent Workflow
@@ -180,3 +192,4 @@ All four crates compile into one binary (`cortex-mcp`). The IDE talks only to th
 | [docs/ARCH.md](docs/ARCH.md) | Architecture, component roles, multi-root routing, progressive disclosure model |
 | [docs/USAGE.md](docs/USAGE.md) | Workflow patterns, path conventions, batch examples, JSON vs YAML rules |
 | [docs/DEVELOPING.md](docs/DEVELOPING.md) | Build commands, test suite, schema source-of-truth, dependency management |
+| [docs/EXTENSION_ARCH.md](docs/EXTENSION_ARCH.md) | Extension-native 13-tool bridge architecture, parity testing flow, cross-platform sidecar packaging |

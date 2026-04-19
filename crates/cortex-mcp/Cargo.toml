@@ -23,7 +23,12 @@ repository.workspace = true
 name = "cortex-mcp"
 path = "src/main.rs"
 
+[[bin]]
+name = "cortex-extension-bridge"
+path = "src/bin/cortex_extension_bridge.rs"
+
 [dependencies]
+serde.workspace              = true
 serde_json.workspace         = true
 anyhow.workspace             = true
 tracing.workspace            = true

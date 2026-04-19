@@ -1,0 +1,923 @@
+Optimizing tool selection...I’m starting by locating the remaining human-readable and diagnostic surfaces in the shipped binaries and the two satellite sources, so each Phase 155 task can stay atomic instead of turning into a blind repo-wide rewrite.
+
+Starting: *Audit satellite surfaces* (1/5)
+
+I’m reading the live directive file and the satellite sources while listing the shipped binary surface; that will tell me whether Task 1 and Task 3 can be solved in the same sources or need separate passes.
+
+Read [](file:///home/hero/Documents/GitHub/z4/bin)
+
+Read [](file:///home/hero/Documents/GitHub/z4/lib)
+
+Read [](file:///home/hero/Documents/GitHub/z4/.github/instructions/z4.machine.directive.instructions.md)
+
+Read [](file:///home/hero/Documents/GitHub/z4/z4reg.z4)
+
+Read [](file:///home/hero/Documents/GitHub/z4/check.z4#1-1), lines 1 to 260
+
+The live picture is narrower than the directive suggests. z4reg.z4 still uses plain `0/1` success markers, check.z4 still carries explicit status bytes like `127` and `255`, and the shipped binary set is only z4c, z4reg, check, httpd_async, plus two `.so` files. I’m mapping the current `0x5dXX` compiler markers and running the first full strings audit now so I can keep Task 1 and Task 3 bounded.
+
+Ran terminal command:  for path in bin/z4c bin/z4reg bin/check bin/httpd_async lib/libphase133_math.so lib/libphase134_string.so; do echo "FILE:$path"; strings -n 4 "$path" | head -n 40; done
+
+Searched for regex `0x5d[0-9a-fA-F]{2}|0xC0[0-4]` (`**/z4c.z4`), 10 results
+
+I’ve confirmed the real residual surface: `z4reg`, `check`, `httpd_async`, and the two DSOs still expose meaningful ASCII, while z4c is already past the recognizable-diagnostic threshold. I’m checking which byte transforms are available in the z4 ISA so I can switch those remaining blobs to a non-printable encoding instead of the current printable shift scheme.
+
+Searched for regex `XOR IA:|XOR E:| XOR ` (`**/*.z4`), 2 results
+
+Searched for regex `0x5d11|0x5d23|0x5d37|0x5d4b|0x5d61` (`**/{z4reg.z4,check.z4,z4c.z4}`), 10 results
+
+Searched for regex `httpd_async:|HTTP/1.1 200 OK|Z4DSO133|phase134_strlen|phase133_magic|startup failed|Content-Type:|Request #` (`**/{httpd_async.z4,phase133_libmath.z4,phase134_lib_string.z4}`), no results
+
+`XOR` is available in the z4 ISA, so I can move the remaining printable blobs to a non-printable encoding instead of the current add-4 scheme. I’m reading the three still-readable source owners now to see whether Task 3 is a small blob rewrite or a broader logic change.
+
+Read [](file:///home/hero/Documents/GitHub/z4/httpd_async.z4#1-1), lines 1 to 220
+
+Read [](file:///home/hero/Documents/GitHub/z4/phase133_libmath.z4)
+
+Read [](file:///home/hero/Documents/GitHub/z4/phase134_lib_string.z4)
+
+The two DSO sources are already numerically clean, so their readable strings may just be stale artifacts. I’m rebuilding those two in isolation first; if the fresh outputs are clean, Task 3 stays focused on `httpd_async` and the satellites instead of forcing unnecessary library surgery.
+
+Ran `cortex_act_shell_exec` 
+Completed with input: {
+  "cwd": "/home/hero/Documents/GitHub/z4",
+  "command": "./bin/z4c -f build/phase133_libmath.filelist -o /tmp/phase155_libphase133_math.so >/dev/null 2>&1 && strings -n 4 /tmp/phase155_libphase133_math.so | head -n 40",
+  "timeout_secs": 120
+}
+
+Ran `cortex_act_shell_exec` 
+Completed with input: {
+  "cwd": "/home/hero/Documents/GitHub/z4",
+  "command": "./bin/z4c -f build/phase134_lib_string.filelist -o /tmp/phase155_libphase134_string.so >/dev/null 2>&1 && strings -n 4 /tmp/phase155_libphase134_string.so | head -n 40",
+  "timeout_secs": 120
+}
+
+The DSO rebuild confirms the old exported symbol names were stale artifacts. The fresh libraries are almost silent already; the remaining meaningful surface is the shared `Z4DSO133` tag plus the live `httpd_async`, `z4reg`, and `check` blobs. I’m tracing that shared DSO tag before I start editing files so I can avoid redundant library rewrites.
+
+Searched for text `Z4DSO133` (`**/*.z4`), no results
+
+Searched for regex `DSO133|Z4DSO`, no results
+
+I didn’t get a workspace hit from the default search path, so I’m rerunning the DSO-tag search with ignored files included and checking the compiler-side DSO code path directly.
+
+Searched codebase for "dynamic shared object tag magic header Z4DSO compiler emitter dso", 8 results
+
+Searched for regex `Z4DSO133|DSO133|Z4DSO`, no results
+
+The shared DSO tag is probably stored as a hex blob rather than plain text, so I’m searching for its byte pattern directly before I touch the DSO emitter path.
+
+Searched for regex `5a3444534f31333300|5A3444534F31333300` (`**/*.z4`), no results
+
+Searched for regex `44534f313333|Z4DSO` (`**/*.z4`), no results
+
+I’m locating the DSO tag with a raw ripgrep pass now, because it didn’t show up through the filtered workspace search and it’s likely hidden inside a hex literal or generated-write path.
+
+Ran terminal command:  rg -n "5a3444534f313333|5A3444534F313333|Z4DSO|44534f313333" .
+Completed with input:  rg -n "5a3444534f313333|5A3444534F313333|Z4DSO|44534f313333" .
+
+`rg` isn’t installed here, so I’m falling back to a plain recursive grep on the same patterns to get the DSO owner without changing the environment.
+
+Ran terminal command:  grep -RInE "5a3444534f313333|5A3444534F313333|Z4DSO|44534f313333" .
+Completed with input:  grep -RInE "5a3444534f313333|5A3444534F313333|Z4DSO|44534f313333" .
+
+I need to know whether the DSO tag lives in the compiler itself or only in the generated libraries, so I’m checking the shipped compiler binary for the same marker before I trace deeper into the emitter path.
+
+Ran terminal command:  strings -n 4 bin/z4c | grep -n "Z4DSO"
+Completed with input:  strings -n 4 bin/z4c | grep -n "Z4DSO"
+
+I’m generating a non-printable XOR encoding from the current live blobs rather than from historical text, so the satellite rewrites stay byte-accurate and don’t reintroduce any of the old printable surfaces.
+
+Ran terminal command:  cd /home/hero/Documents/GitHub/z4
+python3 - <<'PY'
+from pathlib import Path
+import re
+
+
+def get_hexes(path):
+    text = Path(path).read_text()
+    return re.findall(r'DATA DOC:"0x([0-9a-fA-F]+)"', text)
+
+
+def decode_add4(data, length=None, keep_tail=True):
+    b = bytes.fromhex(data)
+    if length is None:
+        return bytes((x + 4) & 0xff for x in b)
+    out = bytearray(b)
+    for i in range(length):
+        out[i] = (out[i] + 4) & 0xff
+    return bytes(out)
+
+
+def encode_xor(data, length=None, key=0xaa):
+    b = bytearray(data)
+    if length is None:
+        rng = range(len(b))
+    else:
+        rng = range(length)
+    for i in rng:
+        b[i] ^= key
+    return b.hex()
+
+z4reg_hexes = get_hexes('z4reg.z4')
+check_hexes = get_hexes('check.z4')
+
+z4reg_path = decode_add4(z4reg_hexes[0], length=6)
+z4reg_blob = decode_add4(z4reg_hexes[1])
+print('Z4REG_PATH=' + encode_xor(z4reg_path, length=6))
+print('Z4REG_BLOB=' + encode_xor(z4reg_blob))
+
+lengths = [5, 2, 2, 19, 26, 18, 19, 9]
+for idx, (hx, length) in enumerate(zip(check_hexes[:8], lengths), 1):
+    original = decode_add4(hx, length=length)
+    print(f'CHECK_{idx}=' + encode_xor(original, length=length))
+PY
+
+The interactive terminal capture stalled mid-script, so I’m rerunning the payload generation through the bounded shell path to get a deterministic result I can patch against.
+
+Ran `cortex_act_shell_exec` 
+Completed with input: {
+  "cwd": "/home/hero/Documents/GitHub/z4",
+  "command": "python3 - <<'PY'\nfrom pathlib import Path\nimport re\n\ndef get_hexes(path):\n    text = Path(path).read_text()\n    return re.findall(r'DATA DOC:\"0x([0-9a-fA-F]+)\"', text)\n\ndef decode_add4(data, length=None):\n    b = bytes.fromhex(data)\n    if length is None:\n        return bytes((x + 4) & 0xff for x in b)\n    out = bytearray(b)\n    for i in range(length):\n        out[i] = (out[i] + 4) & 0xff\n    return bytes(out)\n\ndef encode_xor(data, length=None, key=0xaa):\n    b = bytearray(data)\n    rng = range(len(b)) if length is None else range(length)\n    for i in rng:\n        b[i] ^= key\n    return b.hex()\n\nz4reg_hexes = get_hexes('z4reg.z4')\ncheck_hexes = get_hexes('check.z4')\n\nprint('Z4REG_PATH=' + encode_xor(decode_add4(z4reg_hexes[0], 6), 6))\nprint('Z4REG_BLOB=' + encode_xor(decode_add4(z4reg_hexes[1])))\nlengths = [5, 2, 2, 19, 26, 18, 19, 9]\nfor idx, (hx, length) in enumerate(zip(check_hexes[:8], lengths), 1):\n    print(f'CHECK_{idx}=' + encode_xor(decode_add4(hx, length), length))\nPY",
+  "timeout_secs": 120
+}
+
+Compacted conversationI have the new XOR payloads. I’m reading the active workspace rules and the exact decode/status blocks in the two satellite sources before patching, so the edit stays aligned with the z4 conventions and the existing control flow.
+
+Read [](file:///home/hero/Documents/GitHub/z4/.github/instructions/z4.machine.directive.instructions.md)
+
+Read [](file:///home/hero/Documents/GitHub/z4/.github/instructions/cortex-works-minimal.instructions.md)
+
+Read [](file:///home/hero/Documents/GitHub/z4/.github/instructions/core-red-zones.instructions.md)
+
+Read [](file:///home/hero/Documents/GitHub/z4/z4reg.z4)
+
+Read [](file:///home/hero/Documents/GitHub/z4/check.z4)
+
+The satellite decode paths are exactly where expected. I’m checking the existing XOR opcode syntax next so I can swap the add-4 loops without guessing the instruction form.
+
+Searched for files matching `**/bytecode_optimizer.z4`, 1 match
+
+Read [](file:///home/hero/Documents/GitHub/z4/bytecode_optimizer.z4#1-1), lines 1 to 220
+
+Searched for text `XOR IA:%` (`**/bytecode_optimizer.z4`), 2 results
+
+Read [](file:///home/hero/Documents/GitHub/z4/bytecode_optimizer.z4#250-250), lines 250 to 345
+
+I have the instruction constraints now. Before touching the files, I’m checkpointing the live z4 labels I’m about to change so the satellite-silence step remains reversible and diffable at the symbol level.
+
+Ran `cortex_chronos` 
+Completed with input: {
+  "action": "save_checkpoint",
+  "path": "z4reg.z4",
+  "symbol_name": "f0000000000",
+  "tag": "pre-phase155-task1"
+}
+
+Ran `cortex_chronos` 
+Completed with input: {
+  "action": "save_checkpoint",
+  "path": "z4reg.z4",
+  "symbol_name": "f2d47e0450001aad",
+  "tag": "pre-phase155-task1"
+}
+
+Ran `cortex_chronos` 
+Completed with input: {
+  "action": "save_checkpoint",
+  "path": "check.z4",
+  "symbol_name": "f0000000000",
+  "tag": "pre-phase155-task1"
+}
+
+Ran `cortex_chronos` 
+Completed with input: {
+  "action": "save_checkpoint",
+  "path": "check.z4",
+  "symbol_name": "fb5163c3500000928",
+  "tag": "pre-phase155-task1"
+}
+
+Ran `cortex_chronos` 
+Completed with input: {
+  "action": "save_checkpoint",
+  "path": "check.z4",
+  "symbol_name": "fb5163c3500002266",
+  "tag": "pre-phase155-task1"
+}
+
+Ran `cortex_chronos` 
+Completed with input: {
+  "action": "save_checkpoint",
+  "repoPath": "/home/hero/Documents/GitHub/z4",
+  "path": "z4reg.z4",
+  "symbol_name": "f0000000000",
+  "tag": "pre-phase155-task1"
+}
+
+Ran `cortex_chronos` 
+Completed with input: {
+  "action": "save_checkpoint",
+  "repoPath": "/home/hero/Documents/GitHub/z4",
+  "path": "z4reg.z4",
+  "symbol_name": "f2d47e0450001aad",
+  "tag": "pre-phase155-task1"
+}
+
+Ran `cortex_chronos` 
+Completed with input: {
+  "action": "save_checkpoint",
+  "repoPath": "/home/hero/Documents/GitHub/z4",
+  "path": "check.z4",
+  "symbol_name": "f0000000000",
+  "tag": "pre-phase155-task1"
+}
+
+Ran `cortex_chronos` 
+Completed with input: {
+  "action": "save_checkpoint",
+  "repoPath": "/home/hero/Documents/GitHub/z4",
+  "path": "check.z4",
+  "symbol_name": "fb5163c3500000928",
+  "tag": "pre-phase155-task1"
+}
+
+Ran `cortex_chronos` 
+Completed with input: {
+  "action": "save_checkpoint",
+  "repoPath": "/home/hero/Documents/GitHub/z4",
+  "path": "check.z4",
+  "symbol_name": "fb5163c3500002266",
+  "tag": "pre-phase155-task1"
+}
+
+I need one semantic check before I replace the sentinel values: whether these return values are actually process exit codes or just internal booleans. I’m probing the current binaries directly so I don’t silently change the contract.
+
+Ran `cortex_act_shell_exec` 
+Completed with input: {
+  "cwd": "/home/hero/Documents/GitHub/z4",
+  "command": "./bin/z4reg; printf 'rc=%s\\n' $?",
+  "timeout_secs": 60
+}
+
+Ran `cortex_act_shell_exec` 
+Completed with input: {
+  "cwd": "/home/hero/Documents/GitHub/z4",
+  "command": "./bin/check; printf 'rc=%s\\n' $?",
+  "timeout_secs": 60
+}
+
+Searched for regex `XOR IA:%.* IB:` (`**/*.z4`), 2 results
+
+I’m patching only the two satellite sources in this step: swapping the printable blobs for XOR-obscured blobs, changing the decode helpers from add-4 to XOR, and moving the local sentinel returns onto the `0x5dXX` family.
+
+Generating patch (87 lines) in [](file:///home/hero/Documents/GitHub/z4/z4reg.z4), [](file:///home/hero/Documents/GitHub/z4/check.z4)
+
+
+```
+
+```
+
+```
+
+```
+
+
+Checked [](file:///home/hero/Documents/GitHub/z4/z4reg.z4), [](file:///home/hero/Documents/GitHub/z4/check.z4), no problems found
+
+The source patch is in. Next I’m validating the two rebuilt satellites in isolation, then I’ll refresh the checked-in binaries and re-run the binary-surface audit before moving to the directive-compression step.
+
+Updated todo list
+
+Ran `cortex_act_shell_exec` 
+Completed with input: {
+  "cwd": "/home/hero/Documents/GitHub/z4",
+  "command": "./z4c -build 0x16ab1d44 -o /tmp/z4c_check && /tmp/z4c_check -build 0xb5163c35 -o /tmp/z4_check && /tmp/z4_check && ./z4c -build 0x2d47e045 -o /tmp/z4reg_check && /tmp/z4reg_check && git status --short",
+  "timeout_secs": 120
+}
+
+The first validation pass hit the older compiler surface rather than the Phase 154-silenced binary. I’m checking which executable path is actually current in this repo before I rerun the builds.
+
+Ran `cortex_act_shell_exec` 
+Completed with input: {
+  "cwd": "/home/hero/Documents/GitHub/z4",
+  "command": "ls -l z4c bin/z4c",
+  "timeout_secs": 30
+}
+
+Ran `cortex_act_shell_exec` 
+Completed with input: {
+  "cwd": "/home/hero/Documents/GitHub/z4",
+  "command": "git status --short",
+  "timeout_secs": 30
+}
+
+Ran `cortex_act_shell_exec` 
+Completed with input: {
+  "cwd": "/home/hero/Documents/GitHub/z4",
+  "command": "./bin/z4c -build 0xb5163c35 -o /tmp/z4_check && /tmp/z4_check && ./bin/z4c -build 0x2d47e045 -o /tmp/z4reg_check && /tmp/z4reg_check",
+  "timeout_secs": 120
+}
+
+Ran `cortex_act_shell_exec` 
+Completed with input: {
+  "cwd": "/home/hero/Documents/GitHub/z4",
+  "command": "./bin/z4c -build 0xb5163c35 -o /tmp/z4_check; printf 'build_check_rc=%s\\n' $?; if [ -x /tmp/z4_check ]; then /tmp/z4_check; printf 'run_check_rc=%s\\n' $?; fi",
+  "timeout_secs": 120
+}
+
+Ran `cortex_act_shell_exec` 
+Completed with input: {
+  "cwd": "/home/hero/Documents/GitHub/z4",
+  "command": "./bin/z4c -build 0x2d47e045 -o /tmp/z4reg_check; printf 'build_z4reg_rc=%s\\n' $?; if [ -x /tmp/z4reg_check ]; then /tmp/z4reg_check; printf 'run_z4reg_rc=%s\\n' $?; fi",
+  "timeout_secs": 120
+}
+
+`check` is clean; `z4reg` is not. The new `z4reg` build is returning `0x5d11`, so I’m checking whether the blob I regenerated changed byte length or decode semantics before I touch anything else.
+
+Ran `cortex_act_shell_exec` 
+Completed with input: {
+  "cwd": "/home/hero/Documents/GitHub/z4",
+  "command": "python3 - <<'PY'\nfrom pathlib import Path\nimport re\ntext = Path('z4reg.z4').read_text()\nhexes = re.findall(r'DATA DOC:\"0x([0-9a-fA-F]+)\"', text)\nfor i,h in enumerate(hexes[:2],1):\n    print(i, len(bytes.fromhex(h)))\nPY",
+  "timeout_secs": 30
+}
+
+Ran `cortex_act_shell_exec` 
+Completed with input: {
+  "cwd": "/home/hero/Documents/GitHub/z4",
+  "command": "rm -rf /tmp/phase155_z4reg_probe && mkdir -p /tmp/phase155_z4reg_probe && /tmp/z4reg_check >/dev/null 2>&1; :",
+  "timeout_secs": 30
+}
+
+Ran `cortex_act_shell_exec` 
+Completed with input: {
+  "cwd": "/tmp/phase155_z4reg_probe",
+  "command": "/tmp/z4reg_check; printf 'rc=%s\\n' $?; ls -l",
+  "timeout_secs": 60
+}
+
+Ran `cortex_act_shell_exec` 
+Completed with input: {
+  "cwd": "/tmp/phase155_z4reg_probe",
+  "command": "printf '%s\\n' * | od -An -tx1",
+  "timeout_secs": 30
+}
+
+The path behavior shows the XOR loop compiled but did not restore the live bytes. I’m switching to a safer high-offset additive encoding instead: same non-printable payload goal, but with the already-proven add-immediate decode path.
+
+Ran `cortex_act_shell_exec` 
+Completed with input: {
+  "cwd": "/home/hero/Documents/GitHub/z4",
+  "command": "python3 - <<'PY'\nfrom pathlib import Path\nimport re\n\ndef get_hexes(path):\n    text = Path(path).read_text()\n    return re.findall(r'DATA DOC:\"0x([0-9a-fA-F]+)\"', text)\n\ndef decode_add4(data, length=None):\n    b = bytearray.fromhex(data)\n    rng = range(len(b)) if length is None else range(length)\n    for i in rng:\n        b[i] = (b[i] + 4) & 0xff\n    return bytes(b)\n\ndef encode_add170(data, length=None):\n    b = bytearray(data)\n    rng = range(len(b)) if length is None else range(length)\n    for i in rng:\n        b[i] = (b[i] - 170) & 0xff\n    return b.hex()\n\norig_z4reg = [\n    '76302a6e616300',\n    Path('z4reg.z4').read_text()\n]\n# Recover original bytes from pre-patch blobs by decoding current old source values directly from git HEAD~? easier: hardcode from apply source? no.\n# Instead read old values from current source? current source is XOR-encoded, so use git show HEAD:z4reg.z4 and HEAD:check.z4.\nimport subprocess\nold_z4reg = subprocess.check_output(['git','show','HEAD:z4reg.z4'], text=True)\nold_check = subprocess.check_output(['git','show','HEAD:check.z4'], text=True)\nold_z4reg_hexes = re.findall(r'DATA DOC:\"0x([0-9a-fA-F]+)\"', old_z4reg)\nold_check_hexes = re.findall(r'DATA DOC:\"0x([0-9a-fA-F]+)\"', old_check)\nprint('Z4REG_PATH=' + encode_add170(decode_add4(old_z4reg_hexes[0], 6), 6))\nprint('Z4REG_BLOB=' + encode_add170(decode_add4(old_z4reg_hexes[1])))\nlengths = [5, 2, 2, 19, 26, 18, 19, 9]\nfor idx, (hx, length) in enumerate(zip(old_check_hexes[:8], lengths), 1):\n    print(f'CHECK_{idx}=' + encode_add170(decode_add4(hx, length), length))\nPY",
+  "timeout_secs": 120
+}
+
+Ran `cortex_act_shell_exec` 
+Completed with input: {
+  "cwd": "/tmp",
+  "command": "rm -rf /tmp/phase155_old_z4reg && mkdir -p /tmp/phase155_old_z4reg && cd /tmp/phase155_old_z4reg && /home/hero/Documents/GitHub/z4/bin/z4reg; printf 'rc=%s\\n' $?; ls -l | cat",
+  "timeout_secs": 60
+}
+
+Ran `cortex_act_shell_exec` 
+Completed with input: {
+  "cwd": "/tmp",
+  "command": "rm -rf /tmp/phase155_old_z4reg_twice && mkdir -p /tmp/phase155_old_z4reg_twice && cd /tmp/phase155_old_z4reg_twice && /home/hero/Documents/GitHub/z4/bin/z4reg; printf 'first=%s\\n' $?; /home/hero/Documents/GitHub/z4/bin/z4reg; printf 'second=%s\\n' $?; ls -l | cat",
+  "timeout_secs": 60
+}
+
+I’m correcting the z4reg contract before rerunning validation: its top-level boolean behavior needs to stay stable, so I’m keeping the encoded markers in-source but collapsing them back to the prior success/failure shape at the return edge.
+
+Generating patch (74 lines) in [](file:///home/hero/Documents/GitHub/z4/z4reg.z4), [](file:///home/hero/Documents/GitHub/z4/check.z4)
+
+
+```
+
+```
+
+```
+
+```
+
+
+Checked [](file:///home/hero/Documents/GitHub/z4/z4reg.z4), [](file:///home/hero/Documents/GitHub/z4/check.z4), no problems found
+
+Ran `cortex_act_shell_exec` 
+Completed with input: {
+  "cwd": "/home/hero/Documents/GitHub/z4",
+  "command": "./bin/z4c -build 0xb5163c35 -o /tmp/z4_check && /tmp/z4_check; printf 'check_rc=%s\\n' $?",
+  "timeout_secs": 120
+}
+
+Ran `cortex_act_shell_exec` 
+Completed with input: {
+  "cwd": "/home/hero/Documents/GitHub/z4",
+  "command": "rm -rf /tmp/phase155_z4reg_probe && mkdir -p /tmp/phase155_z4reg_probe && ./bin/z4c -build 0x2d47e045 -o /tmp/z4reg_check && cd /tmp/phase155_z4reg_probe && /tmp/z4reg_check; printf 'z4reg_rc=%s\\n' $?; ls -l | cat",
+  "timeout_secs": 120
+}
+
+The additive encoding is behaving correctly now: `z4reg` decodes back to z4.reg and returns cleanly. I’m auditing the rebuilt satellites’ string surfaces before I stamp the checked-in binaries.
+
+Ran `cortex_act_shell_exec` 
+Completed with input: {
+  "cwd": "/home/hero/Documents/GitHub/z4",
+  "command": "strings /tmp/z4_check | head -n 80",
+  "timeout_secs": 30
+}
+
+Ran `cortex_act_shell_exec` 
+Completed with input: {
+  "cwd": "/home/hero/Documents/GitHub/z4",
+  "command": "strings /tmp/z4reg_check | head -n 80",
+  "timeout_secs": 30
+}
+
+The payloads are functionally correct, but the current shift still leaves too much printable junk in `z4reg`. I’m searching for a better additive key now so I can keep the proven decode path and reduce the remaining ASCII surface before I rebuild the tracked binaries.
+
+Ran `cortex_act_shell_exec` 
+Completed with input: {
+  "cwd": "/home/hero/Documents/GitHub/z4",
+  "command": "python3 - <<'PY'\nfrom pathlib import Path\nimport re, subprocess, string\n\ndef decode_add4(data, length=None):\n    b = bytearray.fromhex(data)\n    rng = range(len(b)) if length is None else range(length)\n    for i in rng:\n        b[i] = (b[i] + 4) & 0xff\n    return bytes(b)\n\ndef encode_addk(data, key, length=None):\n    b = bytearray(data)\n    rng = range(len(b)) if length is None else range(length)\n    for i in rng:\n        b[i] = (b[i] - key) & 0xff\n    return bytes(b)\n\ndef stats(blob):\n    printable = set(range(32, 127))\n    count = sum(1 for x in blob if x in printable)\n    max_run = run = 0\n    for x in blob:\n        if x in printable:\n            run += 1\n            max_run = max(max_run, run)\n        else:\n            run = 0\n    return count, max_run\n\nold_z4reg = subprocess.check_output(['git','show','HEAD:z4reg.z4'], text=True)\nold_check = subprocess.check_output(['git','show','HEAD:check.z4'], text=True)\nold_z4reg_hexes = re.findall(r'DATA DOC:\"0x([0-9a-fA-F]+)\"', old_z4reg)\nold_check_hexes = re.findall(r'DATA DOC:\"0x([0-9a-fA-F]+)\"', old_check)\n\nz4reg_data = [decode_add4(old_z4reg_hexes[0], 6), decode_add4(old_z4reg_hexes[1])]\ncheck_lengths = [5,2,2,19,26,18,19,9]\ncheck_data = [decode_add4(hx, ln) + bytes.fromhex(hx)[ln:] for hx,ln in zip(old_check_hexes[:8], check_lengths)]\n\nbest = []\nfor key in range(1, 256):\n    blobs = [encode_addk(z4reg_data[0], key, 6), encode_addk(z4reg_data[1], key)]\n    blobs += [encode_addk(d, key, l) for d, l in zip([decode_add4(hx, ln) for hx,ln in zip(old_check_hexes[:8], check_lengths)], check_lengths)]\n    total_count = 0\n    worst_run = 0\n    for blob in blobs:\n        count, run = stats(blob)\n        total_count += count\n        worst_run = max(worst_run, run)\n    best.append((worst_run, total_count, key))\n\nfor worst_run, total_count, key in sorted(best)[:20]:\n    print(f'key={key} max_run={worst_run} printable={total_count}')\nPY",
+  "timeout_secs": 120
+}
+
+Ran `cortex_act_shell_exec` 
+Completed with input: {
+  "cwd": "/home/hero/Documents/GitHub/z4",
+  "command": "python3 - <<'PY'\nimport re, subprocess\n\ndef decode_add4(data, length=None):\n    b = bytearray.fromhex(data)\n    rng = range(len(b)) if length is None else range(length)\n    for i in rng:\n        b[i] = (b[i] + 4) & 0xff\n    return bytes(b)\n\ndef encode_addk(data, key, length=None):\n    b = bytearray(data)\n    rng = range(len(b)) if length is None else range(length)\n    for i in rng:\n        b[i] = (b[i] - key) & 0xff\n    return bytes(b)\n\ndef stats(blob):\n    printable = set(range(32, 127))\n    count = sum(1 for x in blob if x in printable)\n    max_run = run = 0\n    for x in blob:\n        if x in printable:\n            run += 1\n            max_run = max(max_run, run)\n        else:\n            run = 0\n    return count, max_run\n\nold_z4reg = subprocess.check_output(['git','show','HEAD:z4reg.z4'], text=True)\nold_check = subprocess.check_output(['git','show','HEAD:check.z4'], text=True)\nold_z4reg_hexes = re.findall(r'DATA DOC:\"0x([0-9a-fA-F]+)\"', old_z4reg)\nold_check_hexes = re.findall(r'DATA DOC:\"0x([0-9a-fA-F]+)\"', old_check)\n\nz4reg_blobs = [decode_add4(old_z4reg_hexes[0], 6), decode_add4(old_z4reg_hexes[1])]\ncheck_lengths = [5,2,2,19,26,18,19,9]\ncheck_blobs = [decode_add4(hx, ln) for hx,ln in zip(old_check_hexes[:8], check_lengths)]\n\nfor name, blobs in [('z4reg', z4reg_blobs), ('check', check_blobs)]:\n    ranked = []\n    for key in range(1,256):\n        total_count = 0\n        worst_run = 0\n        for blob in blobs:\n            count, run = stats(encode_addk(blob, key))\n            total_count += count\n            worst_run = max(worst_run, run)\n        ranked.append((worst_run, total_count, key))\n    print(name)\n    for worst_run, total_count, key in sorted(ranked)[:10]:\n        print(f'  key={key} max_run={worst_run} printable={total_count}')\nPY",
+  "timeout_secs": 120
+}
+
+I found a better split. `check` can go fully non-printable with a dedicated additive key, and `z4reg` can be pushed down to short 5-byte fragments without changing the decode model. I’m regenerating the payloads with per-file keys now.
+
+Ran `cortex_act_shell_exec` 
+Completed with input: {
+  "cwd": "/home/hero/Documents/GitHub/z4",
+  "command": "python3 - <<'PY'\nimport re, subprocess\n\ndef decode_add4(data, length=None):\n    b = bytearray.fromhex(data)\n    rng = range(len(b)) if length is None else range(length)\n    for i in rng:\n        b[i] = (b[i] + 4) & 0xff\n    return bytes(b)\n\ndef encode_addk(data, key, length=None):\n    b = bytearray(data)\n    rng = range(len(b)) if length is None else range(length)\n    for i in rng:\n        b[i] = (b[i] - key) & 0xff\n    return b.hex()\n\nold_z4reg = subprocess.check_output(['git','show','HEAD:z4reg.z4'], text=True)\nold_check = subprocess.check_output(['git','show','HEAD:check.z4'], text=True)\nold_z4reg_hexes = re.findall(r'DATA DOC:\"0x([0-9a-fA-F]+)\"', old_z4reg)\nold_check_hexes = re.findall(r'DATA DOC:\"0x([0-9a-fA-F]+)\"', old_check)\n\nprint('Z4REG_KEY=64')\nprint('Z4REG_PATH=' + encode_addk(decode_add4(old_z4reg_hexes[0], 6), 64, 6))\nprint('Z4REG_BLOB=' + encode_addk(decode_add4(old_z4reg_hexes[1]), 64))\nprint('CHECK_KEY=91')\nlengths = [5,2,2,19,26,18,19,9]\nfor idx, (hx, length) in enumerate(zip(old_check_hexes[:8], lengths), 1):\n    print(f'CHECK_{idx}=' + encode_addk(decode_add4(hx, length), 91, length))\nPY",
+  "timeout_secs": 120
+}
+
+Generating patch (44 lines) in [](file:///home/hero/Documents/GitHub/z4/z4reg.z4), [](file:///home/hero/Documents/GitHub/z4/check.z4)
+
+
+```
+
+```
+
+```
+
+```
+
+
+Checked [](file:///home/hero/Documents/GitHub/z4/z4reg.z4), [](file:///home/hero/Documents/GitHub/z4/check.z4), no problems found
+
+Ran `cortex_act_shell_exec` 
+Completed with input: {
+  "cwd": "/home/hero/Documents/GitHub/z4",
+  "command": "./bin/z4c -build 0xb5163c35 -o /tmp/z4_check && /tmp/z4_check; printf 'check_rc=%s\\n' $? && strings /tmp/z4_check | head -n 40",
+  "timeout_secs": 120
+}
+
+Ran `cortex_act_shell_exec` 
+Completed with input: {
+  "cwd": "/home/hero/Documents/GitHub/z4",
+  "command": "rm -rf /tmp/phase155_z4reg_probe && mkdir -p /tmp/phase155_z4reg_probe && ./bin/z4c -build 0x2d47e045 -o /tmp/z4reg_check && cd /tmp/phase155_z4reg_probe && /tmp/z4reg_check; printf 'z4reg_rc=%s\\n' $? && printf 'file=' && printf '%s\\n' * | od -An -tx1 && strings /tmp/z4reg_check | head -n 60",
+  "timeout_secs": 120
+}
+
+The rebuilt temporary binaries are where they need to be. I’m now stamping the tracked check and z4reg artifacts from the current compiler, then I’ll run the repo-level validation sweep for this subtask.
+
+Ran `cortex_act_shell_exec` 
+Completed with input: {
+  "cwd": "/home/hero/Documents/GitHub/z4",
+  "command": "./bin/z4c -build 0xb5163c35 -o bin/check && ./bin/z4c -build 0x2d47e045 -o bin/z4reg",
+  "timeout_secs": 120
+}
+
+Ran `cortex_z4_reg_reader` 
+Completed with input: {
+  "repoPath": "/home/hero/Documents/GitHub/z4",
+  "path": "z4.reg",
+  "output_format": "json",
+  "max_entries": 200
+}
+
+I need the exact 19-unit matrix before I lock the commit, so I’m pulling the build-unit catalog rather than guessing IDs from memory.
+
+Ran `cortex_z4_unit_scan` 
+Completed with input: {
+  "action": "build_units",
+  "repoPath": "/home/hero/Documents/GitHub/z4",
+  "path": "build",
+  "max_units": 64,
+  "max_entries": 4
+}
+
+Searched for regex `0x[0-9a-f]{8}` (`**/z4c.z4`), 19 results
+
+I have the 19 resolver IDs from the live compiler table. I’m using that list directly for the task-level matrix sweep, then I’ll clean the checkpoint and registry junk before committing the satellite step.
+
+Ran `cortex_act_shell_exec` 
+Completed with input: {
+  "cwd": "/home/hero/Documents/GitHub/z4",
+  "command": "set -e\nfor id in \\\n  0x08c47c09 0xb5163c35 0xe07d3b49 0xa76807b4 0xf03063c9 \\\n  0x035ac01b 0xbbeeba90 0x3effe379 0x6a801272 0x586a0554 \\\n  0xc383fa80 0x28225be5 0x88929134 0x1d3d28b7 0x036fa5af \\\n  0x504504c0 0x16ab1d44 0x99e1df87 0x2d47e045\n do\n  out=\"/tmp/phase155_${id#0x}\"\n  ./bin/z4c -build \"$id\" -o \"$out\"\n  printf '%s 0\\n' \"$id\"\n done\nprintf 'check_strings\\n'\nstrings bin/check | head -n 20\nprintf 'z4reg_strings\\n'\nstrings bin/z4reg | head -n 20",
+  "timeout_secs": 240
+}
+
+Ran `cortex_act_shell_exec` 
+Completed with input: {
+  "cwd": "/home/hero/Documents/GitHub/z4",
+  "command": "rm -rf .cortexast z4.reg && git status --short",
+  "timeout_secs": 30
+}
+
+A stray encoded filename from the failed XOR attempt is still in the repo root. I’m removing that artifact and rechecking the worktree before the atomic commit.
+
+Ran `cortex_act_shell_exec` 
+Completed with input: {
+  "cwd": "/home/hero/Documents/GitHub/z4",
+  "command": "python3 - <<'PY'\nfrom pathlib import Path\nfor path in Path('.').iterdir():\n    if path.is_file() and path.name not in {'.gitignore'}:\n        try:\n            path.name.encode('ascii')\n        except UnicodeEncodeError:\n            print(path.name)\n            path.unlink()\nPY\n\ngit status --short",
+  "timeout_secs": 30
+}
+
+Ran `cortex_act_shell_exec` 
+Completed with input: {
+  "cwd": "/home/hero/Documents/GitHub/z4",
+  "command": "python3 - <<'PY'\nimport os\nfor name in os.listdir(b'.'):\n    if os.path.isfile(name):\n        try:\n            name.decode('ascii')\n        except UnicodeDecodeError:\n            os.unlink(name)\nPY\n\ngit status --short",
+  "timeout_secs": 30
+}
+
+Task 1 is validated and the worktree is down to the four intended files. I’m committing that atomic satellite-silence slice now, then I’ll `git clean -fd` and move on to directive compression.
+
+Ran `cortex_act_shell_exec` 
+Completed with input: {
+  "cwd": "/home/hero/Documents/GitHub/z4",
+  "command": "git add check.z4 z4reg.z4 bin/check bin/z4reg && git commit -m \"[Phase155_0x1551] Satellite_Silence\"",
+  "timeout_secs": 120
+}
+
+Ran `cortex_act_shell_exec` 
+Completed with input: {
+  "cwd": "/home/hero/Documents/GitHub/z4",
+  "command": "git clean -fd && git status --short",
+  "timeout_secs": 60
+}
+
+Starting: *Compress directive keys* (2/4)
+
+I’m compressing the directive file by shortening only the left-hand keys and keeping the values, order, and control semantics intact. That keeps the instruction surface dense without changing what the policy says.
+
+Generating patch (104 lines) in [](file:///home/hero/Documents/GitHub/z4/.github/instructions/z4.machine.directive.instructions.md)
+
+
+```
+
+```
+The directive compression is a pure key-surface change. I’m doing a quick readback to catch any malformed abbreviations before I rerun the 19-ID sweep and commit it separately.
+
+Read [](file:///home/hero/Documents/GitHub/z4/.github/instructions/z4.machine.directive.instructions.md)
+
+Ran `cortex_act_shell_exec` 
+Completed with input: {
+  "cwd": "/home/hero/Documents/GitHub/z4",
+  "command": "set -e\nfor id in \\\n  0x08c47c09 0xb5163c35 0xe07d3b49 0xa76807b4 0xf03063c9 \\\n  0x035ac01b 0xbbeeba90 0x3effe379 0x6a801272 0x586a0554 \\\n  0xc383fa80 0x28225be5 0x88929134 0x1d3d28b7 0x036fa5af \\\n  0x504504c0 0x16ab1d44 0x99e1df87 0x2d47e045\n do\n  ./bin/z4c -build \"$id\" -o \"/tmp/phase155_${id#0x}\"\n  printf '%s 0\\n' \"$id\"\n done\n\ngit status --short",
+  "timeout_secs": 240
+}
+
+The compressed directive file is clean and the 19-ID matrix stayed green. I’m committing that as the second atomic slice now.
+
+Ran `cortex_act_shell_exec` 
+Completed with input: {
+  "cwd": "/home/hero/Documents/GitHub/z4",
+  "command": "git add .github/instructions/z4.machine.directive.instructions.md && git commit -m \"[Phase155_0x1552] Compress_Directive_Keys\" && git clean -fd && git status --short",
+  "timeout_secs": 120
+}
+
+Ran `cortex_act_shell_exec` 
+Completed with input: {
+  "cwd": "/home/hero/Documents/GitHub/z4",
+  "command": "printf 'bin/z4c\\n'; strings bin/z4c | head -n 40\nprintf 'bin/z4reg\\n'; strings bin/z4reg | head -n 40\nprintf 'bin/check\\n'; strings bin/check | head -n 40\nprintf 'bin/httpd_async\\n'; strings bin/httpd_async | head -n 80\nprintf 'lib/libphase133_math.so\\n'; strings lib/libphase133_math.so | head -n 80\nprintf 'lib/libphase134_string.so\\n'; strings lib/libphase134_string.so | head -n 80",
+  "timeout_secs": 120
+}
+
+Searched for regex `Z4DSO133|Z4DSO` (`**/*.z4`), no results
+
+The remaining live ASCII surface is exactly where the first audit said it would be: `httpd_async` plaintext plus stale DSO symbol surfaces and the shared `Z4DSO133` tag. I’m tracing those owners now before I patch the app and refresh the libraries.
+
+Ran `cortex_search_exact` 
+Completed with input: {
+  "project_path": "/home/hero/Documents/GitHub/z4",
+  "regex_pattern": "Z4DSO133|5a3444534f313333",
+  "max_results": 100
+}
+
+Read [](file:///home/hero/Documents/GitHub/z4/httpd_async.z4#1-1), lines 1 to 260
+
+Read binary file [](file:///home/hero/Documents/GitHub/z4/build/phase133_libmath.filelist)
+
+Read binary file [](file:///home/hero/Documents/GitHub/z4/build/phase134_lib_string.filelist)
+
+The DSO filelists are just compact headers, so the remaining library tag is being emitted deeper in the toolchain. I’m locating where `Z4DSO133` sits in the ELF output next so I can decide whether this is a compiler-side tag or something in the library build path.
+
+Ran `cortex_act_shell_exec` 
+Completed with input: {
+  "cwd": "/home/hero/Documents/GitHub/z4",
+  "command": "./bin/z4c -build 0x6a801272 -o /tmp/phase155_libphase133_math.so && strings -a -t x /tmp/phase155_libphase133_math.so | grep 'Z4DSO133'",
+  "timeout_secs": 120
+}
+
+Ran `cortex_act_shell_exec` 
+Completed with input: {
+  "cwd": "/home/hero/Documents/GitHub/z4",
+  "command": "./bin/z4c -build 0x586a0554 -o /tmp/phase155_libphase134_string.so && strings -a -t x /tmp/phase155_libphase134_string.so | grep 'Z4DSO133'",
+  "timeout_secs": 120
+}
+
+Ran `cortex_act_shell_exec` 
+Completed with input: {
+  "cwd": "/home/hero/Documents/GitHub/z4",
+  "command": "readelf -p .comment /tmp/phase155_libphase133_math.so | cat",
+  "timeout_secs": 60
+}
+
+Ran `cortex_act_shell_exec` 
+Completed with input: {
+  "cwd": "/home/hero/Documents/GitHub/z4",
+  "command": "readelf -p .comment /tmp/phase155_libphase134_string.so | cat",
+  "timeout_secs": 60
+}
+
+Ran `cortex_act_shell_exec` 
+Completed with input: {
+  "cwd": "/home/hero/Documents/GitHub/z4",
+  "command": "readelf -S /tmp/phase155_libphase133_math.so | cat",
+  "timeout_secs": 60
+}
+
+Ran `cortex_act_shell_exec` 
+Completed with input: {
+  "cwd": "/home/hero/Documents/GitHub/z4",
+  "command": "python3 - <<'PY'\nfrom pathlib import Path\np = Path('/tmp/phase155_libphase133_math.so').read_bytes()\no = 0x121ab\nprint(p[o-64:o+64].hex())\nPY",
+  "timeout_secs": 30
+}
+
+Ran `cortex_act_shell_exec` 
+Completed with input: {
+  "cwd": "/home/hero/Documents/GitHub/z4",
+  "command": "python3 - <<'PY'\nfrom pathlib import Path\np = Path('/tmp/phase155_libphase134_string.so').read_bytes()\no = 0x215\nprint(p[o-64:o+64].hex())\nPY",
+  "timeout_secs": 30
+}
+
+Ran `cortex_search_exact` 
+Completed with input: {
+  "project_path": "/home/hero/Documents/GitHub/z4",
+  "regex_pattern": "Z4SMI001|SMI001|DSO|shared|soname|dynamic",
+  "max_results": 200
+}
+
+Searched for text `@f0000000000:` (`**/httpd_async.z4`), 1 result
+
+Read [](file:///home/hero/Documents/GitHub/z4/httpd_async.z4#430-430), lines 430 to 609
+
+Ran `cortex_act_shell_exec` 
+Completed with input: {
+  "cwd": "/home/hero/Documents/GitHub/z4",
+  "command": "python3 - <<'PY'\nimport re\nfrom pathlib import Path\ntext = Path('httpd_async.z4').read_text()\nhexes = re.findall(r'DATA DOC:\"0x([0-9a-fA-F]+)\"', text)[:6]\nblobs = []\nfor hx in hexes:\n    b = bytes.fromhex(hx)\n    length = len(b)-1\n    blobs.append((length,b))\nprint('lengths', [l for l,_ in blobs])\nprint('best keys')\nfor key in range(1,256):\n    total = 0\n    worst = 0\n    for length,b in blobs:\n        enc = bytearray(b)\n        for i in range(length):\n            enc[i] = (enc[i]-key)&0xff\n        printable = set(range(32,127))\n        count = sum(1 for x in enc if x in printable)\n        run = 0; max_run = 0\n        for x in enc:\n            if x in printable:\n                run += 1; max_run = max(max_run, run)\n            else:\n                run = 0\n        total += count; worst = max(worst, max_run)\n    if worst == 0:\n        print('key', key, 'printable', total)\n        break\nPY",
+  "timeout_secs": 60
+}
+
+Ran `cortex_act_shell_exec` 
+Completed with input: {
+  "cwd": "/home/hero/Documents/GitHub/z4",
+  "command": "python3 - <<'PY'\nimport re\nfrom pathlib import Path\ntext = Path('httpd_async.z4').read_text()\nhexes = re.findall(r'DATA DOC:\"0x([0-9a-fA-F]+)\"', text)[:6]\nfor idx,hx in enumerate(hexes,1):\n    b = bytearray.fromhex(hx)\n    for i in range(len(b)-1):\n        b[i] = (b[i]-91)&0xff\n    print(idx, b.hex(), len(b)-1)\nPY",
+  "timeout_secs": 60
+}
+
+I’m patching `httpd_async` the same way the satellites ended up working: a startup decode prelude plus a single additive decode helper. That keeps the app logic untouched and removes the plaintext HTTP/status surface from the shipped binary.
+
+Generating patch (71 lines) in [](file:///home/hero/Documents/GitHub/z4/httpd_async.z4)
+
+
+```
+
+```
+
+
+Checked [](file:///home/hero/Documents/GitHub/z4/httpd_async.z4), no problems found
+
+Ran `cortex_act_shell_exec` 
+Completed with input: {
+  "cwd": "/home/hero/Documents/GitHub/z4",
+  "command": "./bin/z4c -build 0xa76807b4 -o /tmp/httpd_async_check && strings /tmp/httpd_async_check | head -n 60",
+  "timeout_secs": 120
+}
+
+The explicit HTTP strings are gone, but `httpd_async` still inherits readable payloads from lower layers. I’m tracing those four remaining strings now so I can decide whether this is a small edge-file cleanup or a shared core surface that needs one targeted fix.
+
+Searched for regex `\(null\)|0\.000000|data/z4_database\.txt` (`**/*.z4`), no results
+
+Searched for text `000000` (`**/*.z4`), 50 results
+
+Searched for text `data/z4_database.txt`, 1 result
+
+Searched for regex `data/z4_database\.txt`, 1 result
+
+Searched for regex `\(null\)|0\.000000`, no results
+
+Searched for text `000000`, 50 results
+
+The remaining surface has crossed from obvious app literals into toolchain/runtime ownership. I’m delegating a read-only trace to the exploration agent so I can patch the smallest real owners instead of guessing across `fmt`, `db`, and the DSO emitter.
+
+Trace binary string owners
+
+Read memory
+
+Read memory [](file:///home/hero/.config/Code/User/workspaceStorage/8c7ac5589ec3975bbbbb5ff679d71f01/GitHub.copilot-chat/memory-tool/memories/repo/phase154-silent-matrix-linux-finish.md)
+
+Read memory [](file:///home/hero/.config/Code/User/workspaceStorage/8c7ac5589ec3975bbbbb5ff679d71f01/GitHub.copilot-chat/memory-tool/memories/repo/phase153-final-total-void.md)
+
+Searched for regex `\(null\)|0\.000000|000000|data/z4_database\.txt|Z4DSO133`, 50 results
+
+Read [](file:///home/hero/Documents/GitHub/z4/.github/instructions/z4.machine.directive.instructions.md)
+
+Searched for text `\(null\)`, no results
+
+Searched for text `Z4DSO133`, no results
+
+Searched for text `data/z4_database.txt`, 1 result
+
+Searched for text `0\.000000`, no results
+
+Searched for text `\(null\)`, no results
+
+Searched for text `Z4DSO133`, no results
+
+Searched for text `0\.000000`, no results
+
+Searched for text `000000`, 30 results
+
+Read [](file:///home/hero/Documents/GitHub/z4/httpd.z4#1-1), lines 1 to 100
+
+Read [](file:///home/hero/Documents/GitHub/z4/db.z4#1-1), lines 1 to 50
+
+Read [](file:///home/hero/Documents/GitHub/z4/fmt.z4#1-1), lines 1 to 50
+
+Searched codebase for "Z4DSO133 phase133 phase155", 18 results
+
+Read [](file:///home/hero/Documents/GitHub/z4/phase133_libmath.z4)
+
+Read [](file:///home/hero/Documents/GitHub/z4/phase133_dso_main.z4#1-1), lines 1 to 50
+
+Searched for text `DSO`, 6 results
+
+Read [](file:///home/hero/Documents/GitHub/z4/phase134_dso_multi_proof.z4#1-1), lines 1 to 100
+
+Searched for regex `5a3444534f|Z4DSO|magic`, 1 result
+
+Read binary file [](file:///home/hero/Documents/GitHub/z4/build/phase133_libmath.filelist)
+
+Searched for text `phase155`, 5 results
+
+Searched for text `emitter`, 6 results
+
+Read [](file:///home/hero/Documents/GitHub/z4/emitter.z4#1-1), lines 1 to 200
+
+Searched for text `soname`, no results
+
+Searched for regex `libphase133|libphase134|phase133_math|phase134`, 8 results
+
+Read [](file:///home/hero/Documents/GitHub/z4/elf_writer.z4#1-1), lines 1 to 100
+
+Searched for text `5a3444534f`, no results
+
+Read [](file:///home/hero/Documents/GitHub/z4/compiler_stage4.z4#1-1), lines 1 to 20
+
+Searched for text `library name version string`, no results
+
+Read memory [](file:///home/hero/.config/Code/User/workspaceStorage/8c7ac5589ec3975bbbbb5ff679d71f01/GitHub.copilot-chat/memory-tool/memories/repo/phase150-self-healing-bootstrap.md)
+
+Read [](file:///tmp)
+
+Searched for regex `null|format|printf|strftime|strptime|0x000000|phase133|phase134`, 50 results
+
+Read [](file:///home/hero/Documents/GitHub/z4/fmt.z4#1-1), lines 1 to 200
+
+Searched codebase for "httpd printf formatting output buffer string concatenation fwrite", 22 results
+
+Created memory file [](file:///home/hero/.config/Code/User/workspaceStorage/8c7ac5589ec3975bbbbb5ff679d71f01/GitHub.copilot-chat/memory-tool/memories/MDUwZTk1ZTEtMDZiNS00ZTdlLWE5OWYtMDM2OTdlNjUyNTFi/phase155-string-artifacts-analysis.md)
+
+Searched for text `readelf -d|soname|DT_SONAME|sh_type|SHT_DYNSYM`, no results
+
+Read [](file:///home/hero/Documents/GitHub/z4/elf_writer.z4#100-100), lines 100 to 300
+
+Updated memory file [](file:///home/hero/.config/Code/User/workspaceStorage/8c7ac5589ec3975bbbbb5ff679d71f01/GitHub.copilot-chat/memory-tool/memories/MDUwZTk1ZTEtMDZiNS00ZTdlLWE5OWYtMDM2OTdlNjUyNTFi/phase155-string-artifacts-analysis.md)
+
+The exploration trace narrows the remaining owned surfaces to fmt.z4, db.z4, and a compiler-generated DSO tag. I’m inspecting those exact source regions now so I can decide whether to silence the shared literals at the root or isolate them out of the shipped binaries.
+
+Read [](file:///home/hero/Documents/GitHub/z4/fmt.z4#1-1), lines 1 to 260
+
+Read [](file:///home/hero/Documents/GitHub/z4/db.z4)
+
+Searched for regex `phase133|DSO|shared|dl|soname` (`**/elf_writer.z4`), no results
+
+Searched for regex `phase133|DSO|shared|dl|soname` (`**/compiler_stage4.z4`), no results
+
+Searched for regex `phase133|DSO|shared|dl|soname` (`**/emitter.z4`), no results
+
+Searched for regex `@fc48827f400000000|@fc48827f4000000b2|@fc48827f4000000e0|@fc48827f40000006a|@fc48827f40000008e` (`**/fmt.z4`), 12 results
+
+Searched for text `@f0000000000:` (`**/fmt.z4`), no results
+
+Read [](file:///home/hero/Documents/GitHub/z4/fmt.z4#280-280), lines 280 to 360
+
+Read [](file:///home/hero/Documents/GitHub/z4/fmt.z4#440-440), lines 440 to 520
+
+Read [](file:///home/hero/Documents/GitHub/z4/fmt.z4#360-360), lines 360 to 450
+
+Read [](file:///home/hero/Documents/GitHub/z4/fmt.z4#250-250), lines 250 to 290
+
+Ran `cortex_act_shell_exec` 
+Completed with input: {
+  "cwd": "/home/hero/Documents/GitHub/z4",
+  "command": "python3 - <<'PY'\nimport re\nfrom pathlib import Path\nhexes = re.findall(r'DATA DOC:\"0x([0-9a-fA-F]+)\"', Path('fmt.z4').read_text())[:7]\n# encode indices 0,3,4,5,6 with key 91\nfor idx in [0,3,4,5,6]:\n    b = bytearray.fromhex(hexes[idx])\n    for i in range(len(b)-1):\n        b[i] = (b[i]-91)&0xff\n    print(idx, b.hex(), len(b)-1)\nPY",
+  "timeout_secs": 30
+}
+
+Read [](file:///home/hero/Documents/GitHub/z4/fmt.z4#520-520), lines 520 to 557
+
+Read [](file:///home/hero/Documents/GitHub/z4/fmt.z4#230-230), lines 230 to 255
+
+Searched for text `@f9449309900000000` (`**/db.z4`), 3 results
+
+Ran `cortex_act_shell_exec` 
+Completed with input: {
+  "cwd": "/home/hero/Documents/GitHub/z4",
+  "command": "python3 - <<'PY'\nfrom pathlib import Path\nimport re\nhx = re.findall(r'DATA DOC:\"0x([0-9a-fA-F]+)\"', Path('db.z4').read_text())[0]\nb = bytearray.fromhex(hx)\nfor i in range(len(b)-1):\n    b[i] = (b[i]-91)&0xff\nprint(b.hex(), len(b)-1)\nPY",
+  "timeout_secs": 30
+}
+
+The task-3 fix path is splitting cleanly into two owners: shared literals in fmt.z4 and db.z4, and a separate compiler-generated DSO tag. I’m handling the shared literals first because that removes the remaining `httpd_async` surface in one bounded core edit.
+
+Searched for text `DATA DOC` (`**/elf_writer.z4`), no results
+
+Searched for text `DATA DOC` (`**/compiler_stage4.z4`), no results
+
+Searched for text `DATA DOC` (`**/emitter.z4`), no results
+
+Searched for regex `CALL OS:@fc48827f40000583c|CALL OS:@f944930990000` (`**/*.z4`), 7 results
+
+Searched for regex `STORE D:8 IA:1 IB:@|LOAD D:8 IA:%.* IB:@` (`**/*.z4`), no results
+
+I’m applying the shared-literal root fix now in fmt.z4: encode the long printable constants, add a one-time decode gate, and call it only from the formatting entry points that actually touch those literals.
+
+Generating patch (104 lines) in [](file:///home/hero/Documents/GitHub/z4/fmt.z4)
+
+
+```
+
+```
+I’m pairing that with the db.z4 path literal now so the remaining `httpd_async` path surface disappears from the shared core instead of being masked only in one app.
+
+Generating patch (66 lines) in [](file:///home/hero/Documents/GitHub/z4/db.z4)
+
+
+```
+
+```
+
+
+Checked [](file:///home/hero/Documents/GitHub/z4/fmt.z4), [](file:///home/hero/Documents/GitHub/z4/db.z4), no problems found
+
+Read [](file:///home/hero/Documents/GitHub/z4/db.z4#240-240), lines 240 to 298
+
+Read [](file:///home/hero/Documents/GitHub/z4/fmt.z4#540-540), lines 540 to 612
+
+Generating patch (80 lines) in [](file:///home/hero/Documents/GitHub/z4/db.z4)
+
+
+```
+
+```
+
+
+Checked [](file:///home/hero/Documents/GitHub/z4/fmt.z4), [](file:///home/hero/Documents/GitHub/z4/db.z4), [](file:///home/hero/Documents/GitHub/z4/httpd_async.z4), no problems found
+
+Ran `cortex_act_shell_exec` 
+Completed with input: {
+  "cwd": "/home/hero/Documents/GitHub/z4",
+  "command": "./bin/z4c -build 0xa76807b4 -o /tmp/httpd_async_check && strings /tmp/httpd_async_check | head -n 80",
+  "timeout_secs": 120
+}
+
+The shared literal cleanup removed the remaining `httpd_async` plaintext. I’m refreshing the tracked `httpd_async` and both library artifacts now so the final sweep reflects source-owned output rather than stale binaries.
+
+Ran `cortex_act_shell_exec` 
+Completed with input: {
+  "cwd": "/home/hero/Documents/GitHub/z4",
+  "command": "./bin/z4c -build 0xa76807b4 -o bin/httpd_async && ./bin/z4c -build 0x6a801272 -o lib/libphase133_math.so && ./bin/z4c -build 0x586a0554 -o lib/libphase134_string.so",
+  "timeout_secs": 240
+}
+
+Continue to iterate?
+[object Object]
+
+Made changes.

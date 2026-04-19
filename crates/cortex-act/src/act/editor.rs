@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 // ─── Symbol type (local to cortex-act, independent of CortexAST inspector) ───
@@ -10,11 +11,20 @@ pub struct Symbol {
     pub end_byte: usize,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AstEdit {
     /// e.g. "class:Auth" or "function:login" or just the bare identifier "login"
     pub target: String,
     pub action: String, // "replace", "delete"
     pub code: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PlannedAstEdit {
+    pub file_path: String,
+    pub updated_source: String,
+    pub edit_count: usize,
+    pub message: String,
 }
 
 // ─── Tree-sitter based symbol extraction for core-3 languages ─────────────────
@@ -287,12 +297,50 @@ pub fn apply_ast_edits(
     // 0. Permission Guard
     check_write_permission(file_path)?;
 
-    let source_bytes = std::fs::read(file_path).context("Failed to read original source")?;
-    let mut current_source = String::from_utf8_lossy(&source_bytes).into_owned();
+    let plan = plan_ast_edits(file_path, None, edits)?;
 
+    // 4. Commit to disk
+    std::fs::write(file_path, &plan.updated_source).context("Failed to write to file")?;
+    Ok(plan.updated_source)
+}
+
+pub fn plan_ast_edits(
+    file_path: &Path,
+    source_override: Option<&str>,
+    edits: Vec<AstEdit>,
+) -> Result<PlannedAstEdit> {
+    let current_source = match source_override {
+        Some(source) => source.to_string(),
+        None => {
+            let source_bytes = std::fs::read(file_path)
+                .context("Failed to read original source")?;
+            String::from_utf8_lossy(&source_bytes).into_owned()
+        }
+    };
+    let operations = collect_ast_operations(file_path, &current_source, &edits)?;
+    let updated_source = render_ast_edits(&current_source, operations);
+    validate_ast_output(file_path, &updated_source)?;
+
+    Ok(PlannedAstEdit {
+        file_path: file_path.display().to_string(),
+        updated_source,
+        edit_count: edits.len(),
+        message: format!(
+            "Planned {} AST edit(s) for {}",
+            edits.len(),
+            file_path.display()
+        ),
+    })
+}
+
+fn collect_ast_operations(
+    file_path: &Path,
+    current_source: &str,
+    edits: &[AstEdit],
+) -> Result<Vec<(usize, usize, AstEdit)>> {
     // 1. Gather targeted byte ranges with symbol extractor
     let mut operations = Vec::new();
-    let symbols = extract_symbols(file_path, &current_source);
+    let symbols = extract_symbols(file_path, current_source);
 
     for edit in edits {
         let sym = symbols.iter().find(|s| {
@@ -301,7 +349,7 @@ pub fn apply_ast_edits(
         });
 
         if let Some(s) = sym {
-            operations.push((s.start_byte, s.end_byte, edit));
+            operations.push((s.start_byte, s.end_byte, edit.clone()));
         } else {
             anyhow::bail!(
                 "AST target not found in source: '{}'. Use `map_overview` first to discover symbol names.",
@@ -312,11 +360,16 @@ pub fn apply_ast_edits(
 
     // Sort descending (Bottom-Up) to preserve byte offsets
     operations.sort_by(|a, b| b.0.cmp(&a.0));
+    Ok(operations)
+}
+
+fn render_ast_edits(current_source: &str, operations: Vec<(usize, usize, AstEdit)>) -> String {
+    let mut rendered = current_source.to_string();
 
     // 2. Apply edits in-memory
     for (start, end, edit) in operations {
-        let prefix = &current_source[..start];
-        let suffix = &current_source[end..];
+        let prefix = &rendered[..start];
+        let suffix = &rendered[end..];
         let replacement = match edit.action.as_str() {
             "delete" => "",
             _ => edit.code.as_str(),
@@ -333,9 +386,13 @@ pub fn apply_ast_edits(
         } else {
             ""
         };
-        current_source = format!("{}{}{}{}", prefix, replacement, sep, suffix);
+        rendered = format!("{}{}{}{}", prefix, replacement, sep, suffix);
     }
 
+    rendered
+}
+
+fn validate_ast_output(file_path: &Path, current_source: &str) -> Result<()> {
     // 3. Tree-sitter validation for Rust files (fast, no Wasm needed)
     let ext = file_path.extension().and_then(|e| e.to_str()).unwrap_or("");
     if ext == "rs" {
@@ -343,9 +400,9 @@ pub fn apply_ast_edits(
         parser
             .set_language(&tree_sitter_rust::language().into())
             .ok();
-        if let Some(tree) = parser.parse(&current_source, None) {
+        if let Some(tree) = parser.parse(current_source, None) {
             if tree.root_node().has_error() {
-                let ts_errors = collect_ts_errors(tree.root_node(), &current_source);
+                let ts_errors = collect_ts_errors(tree.root_node(), current_source);
                 anyhow::bail!(
                     "Edit produced {} syntax error(s): {}. Edit aborted safely.",
                     ts_errors.len(),
@@ -355,9 +412,7 @@ pub fn apply_ast_edits(
         }
     }
 
-    // 4. Commit to disk
-    std::fs::write(file_path, &current_source).context("Failed to write to file")?;
-    Ok(current_source)
+    Ok(())
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -496,5 +551,25 @@ mod tests {
     fn permission_guard_passes_for_writable() {
         let f = temp_rs("fn main() {}");
         assert!(check_write_permission(f.path()).is_ok());
+    }
+
+    #[test]
+    fn plan_ast_edits_uses_override_source_without_writing_file() {
+        let f = temp_rs("fn greet() { println!(\"hi\"); }\n");
+        let original = std::fs::read_to_string(f.path()).unwrap();
+
+        let plan = plan_ast_edits(
+            f.path(),
+            Some(&original),
+            vec![AstEdit {
+                target: "greet".to_string(),
+                action: "replace".to_string(),
+                code: "fn greet() { println!(\"bye\"); }".to_string(),
+            }],
+        )
+        .unwrap();
+
+        assert!(plan.updated_source.contains("bye"));
+        assert_eq!(std::fs::read_to_string(f.path()).unwrap(), original);
     }
 }

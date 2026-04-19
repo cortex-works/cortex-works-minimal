@@ -1,0 +1,813 @@
+{
+  "name": "cortex-works-vscode",
+  "displayName": "Cortex Works",
+  "description": "Extension-native channel for the existing 13 Cortex tools.",
+  "version": "0.3.0",
+  "publisher": "devshero",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/DevsHero/cortex-works"
+  },
+  "engines": {
+    "vscode": "^1.103.0"
+  },
+  "categories": [
+    "AI",
+    "Other"
+  ],
+  "keywords": [
+    "mcp",
+    "agent",
+    "copilot",
+    "rust",
+    "extension"
+  ],
+  "extensionKind": [
+    "workspace"
+  ],
+  "main": "./out/extension.js",
+  "activationEvents": [
+    "onStartupFinished",
+    "onLanguageModelTool:cortex_code_explorer",
+    "onLanguageModelTool:cortex_symbol_analyzer",
+    "onLanguageModelTool:cortex_chronos",
+    "onLanguageModelTool:cortex_manage_ast_languages",
+    "onLanguageModelTool:cortex_act_edit_ast",
+    "onLanguageModelTool:cortex_act_edit_data_graph",
+    "onLanguageModelTool:cortex_act_edit_markup",
+    "onLanguageModelTool:cortex_act_sql_surgery",
+    "onLanguageModelTool:cortex_act_shell_exec",
+    "onLanguageModelTool:cortex_act_batch_execute",
+    "onLanguageModelTool:cortex_search_exact",
+    "onLanguageModelTool:cortex_mcp_hot_reload",
+    "onLanguageModelTool:cortex_fs_manage"
+  ],
+  "files": [
+    "out/**",
+    "resources/**",
+    "scripts/stage-sidecars.mjs",
+    "LICENSE.txt",
+    "README.md",
+    "package.json"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "cortexWorks.showStatus",
+        "title": "Cortex Works: Show Runtime Status",
+        "category": "Cortex Works",
+        "icon": "$(pulse)"
+      },
+      {
+        "command": "cortexWorks.restartNativeBridge",
+        "title": "Cortex Works: Restart Native Bridge",
+        "category": "Cortex Works",
+        "icon": "$(debug-restart)"
+      },
+      {
+        "command": "cortexWorks.runParitySelfTest",
+        "title": "Cortex Works: Run Parity Self-Test",
+        "category": "Cortex Works",
+        "icon": "$(beaker)"
+      }
+    ],
+    "configuration": {
+      "title": "Cortex Works",
+      "properties": {
+        "cortexWorks.binaryOverrides.extensionBridge": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Optional absolute path override for the `cortex-extension-bridge` binary bundled by the extension.",
+          "scope": "machine-overridable",
+          "ignoreSync": true
+        },
+        "cortexWorks.binaryOverrides.cortexMcp": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Optional absolute path override for the bundled `cortex-mcp` binary used for parity testing.",
+          "scope": "machine-overridable",
+          "ignoreSync": true
+        }
+      }
+    },
+    "languageModelTools": [
+      {
+        "name": "cortex_code_explorer",
+        "displayName": "Cortex Code Explorer",
+        "userDescription": "Map repo topology, inspect code structure, or deep-slice relevant files.",
+        "modelDescription": "Map an unfamiliar repo, inspect workspace topology, deep-slice relevant files, or emit a signatures-only skeleton. Start with workspace_topology or map_overview for orientation; use deep_slice when you need bodies and context. In single-root repos use plain repo-relative paths such as 'crates/cortex-mcp/src'. Use [FolderName]/... only when MCP initialize provided multiple workspace roots.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "cortex-code-explorer",
+        "icon": "$(search)",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "enum": [
+                "workspace_topology",
+                "map_overview",
+                "deep_slice",
+                "skeleton"
+              ],
+              "description": "workspace_topology: ultra-low-token workspace summary listing only discovered projects, manifests, and language hints. map_overview: bird's-eye symbol map of one or more dirs; in multi-root mode prefer target_dirs=['[Host]','[Daemon]'] instead of '.'. deep_slice: token-budgeted XML with bodies for a concrete target file or dir; use single_file=true for one exact file. skeleton: project-wide YAML signatures-only constitution for one or more explicit target dirs."
+            },
+            "repoPath": {
+              "type": "string",
+              "description": "Absolute path to the primary repo root. Use this for workspace_topology or when you want to pin exploration to a specific root."
+            },
+            "target_project": {
+              "type": "string",
+              "description": "Cross-project: ID or abs path from network map. Overrides repoPath."
+            },
+            "target_dirs": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "(map_overview, skeleton) One or more dirs to analyze. Use repo-relative paths in single-root repos. In multi-root workspaces, prefer explicit prefixes such as ['[Host]','[Daemon]'] or ['[Host]/src','[Daemon]/src']."
+            },
+            "target_dir": {
+              "type": "string",
+              "description": "Deprecated singular form of target_dirs. Kept for compatibility; prefer target_dirs=[...] moving forward."
+            },
+            "search_filter": {
+              "type": "string",
+              "description": "(map_overview) Case-insensitive substring filter. OR via 'foo|bar'."
+            },
+            "max_chars": {
+              "type": "integer",
+              "description": "Max output chars. Default 8000."
+            },
+            "ignore_gitignore": {
+              "type": "boolean",
+              "description": "(map_overview) Include git-ignored files."
+            },
+            "exclude": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Dir names to skip (e.g. ['node_modules','build'])."
+            },
+            "target": {
+              "type": "string",
+              "description": "(deep_slice) Repo-relative path to a file or dir. In multi-root workspaces prefix with [FolderName]/, e.g. '[AnvilSynth]/src/main.rs'."
+            },
+            "budget_tokens": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "description": "(deep_slice) Token budget. Default 32000."
+            },
+            "skeleton_only": {
+              "type": "boolean",
+              "description": "(deep_slice) Strip function bodies, return signatures only."
+            },
+            "single_file": {
+              "type": "boolean",
+              "description": "(deep_slice) Return only the exact target file (no directory expansion)."
+            },
+            "max_files": {
+              "type": "integer",
+              "description": "(skeleton) Max source files to include (default 200, hard cap 500)."
+            },
+            "extensions": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "(skeleton) Optional list of file extensions to include (e.g. ['rs','ts']). Omit for all supported languages."
+            }
+          },
+          "required": [
+            "action"
+          ]
+        }
+      },
+      {
+        "name": "cortex_symbol_analyzer",
+        "displayName": "Cortex Symbol Analyzer",
+        "userDescription": "Read exact symbols and analyze usages or blast radius.",
+        "modelDescription": "Exact symbol analysis for reading source, finding usages, implementations, blast radius, and propagation checklists. Use this when you already know the symbol or need precise impact analysis instead of broad repo mapping.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "cortex-symbol-analyzer",
+        "icon": "$(symbol-method)",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "enum": [
+                "read_source",
+                "find_usages",
+                "find_implementations",
+                "blast_radius",
+                "propagation_checklist"
+              ],
+              "description": "read_source (needs path+symbol_name). find_usages (needs symbol_name+target_dir). find_implementations. blast_radius (run before rename/delete). propagation_checklist (shared type update checklist)."
+            },
+            "repoPath": {
+              "type": "string",
+              "description": "Absolute path to the primary repo root when you want to pin analysis to one workspace root."
+            },
+            "target_project": {
+              "type": "string",
+              "description": "Cross-project: ID or abs path. Overrides repoPath."
+            },
+            "symbol_name": {
+              "type": "string",
+              "description": "Target symbol name (exact, no regex)."
+            },
+            "target_dir": {
+              "type": "string",
+              "description": "Scope dir ('.' = whole repo). Use repo-relative paths in single-root repos. In multi-root workspaces prefix with [FolderName]/ to target a specific root, e.g. '[Host]/src'. Required for find_usages/blast_radius."
+            },
+            "ignore_gitignore": {
+              "type": "boolean",
+              "description": "(propagation_checklist) Include git-ignored files."
+            },
+            "max_chars": {
+              "type": "integer",
+              "description": "Max output chars. Default 8000."
+            },
+            "only_dir": {
+              "type": "string",
+              "description": "(propagation_checklist) Restrict scan to this subdir. Use repo-relative paths in single-root repos or [FolderName]/... in multi-root workspaces."
+            },
+            "aliases": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "(propagation_checklist) Alternative names across language boundaries."
+            },
+            "path": {
+              "type": "string",
+              "description": "(read_source) Source file. Use a repo-relative path in single-root repos or [FolderName]/path/to/file in multi-root workspaces. Required."
+            },
+            "symbol_names": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "(read_source) Batch: extract multiple symbols from path."
+            },
+            "skeleton_only": {
+              "type": "boolean",
+              "description": "(read_source) Return signatures only, strip bodies."
+            },
+            "instance_index": {
+              "type": "integer",
+              "description": "(read_source) 0-based index when symbol has multiple definitions in the file."
+            },
+            "changed_path": {
+              "type": "string",
+              "description": "(propagation_checklist) Contract file path (e.g. .proto) — overrides symbol mode."
+            },
+            "max_symbols": {
+              "type": "integer",
+              "description": "(propagation_checklist) Max extracted symbols. Default 20."
+            }
+          },
+          "required": [
+            "action"
+          ]
+        }
+      },
+      {
+        "name": "cortex_chronos",
+        "displayName": "Cortex Chronos",
+        "userDescription": "Save, list, compare, and delete AST-aware checkpoints.",
+        "modelDescription": "AST-aware checkpointing for risky refactors. Save a checkpoint before editing, then compare against live code afterward without being distracted by formatting-only diffs.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "cortex-chronos",
+        "icon": "$(history)",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "enum": [
+                "save_checkpoint",
+                "list_checkpoints",
+                "compare_checkpoint",
+                "delete_checkpoint"
+              ],
+              "description": "save_checkpoint: snapshot symbol before edit (needs path+symbol_name+tag). list_checkpoints: list all saved tags. compare_checkpoint: AST diff between two tags (needs symbol_name+tag_a+tag_b; tag_b='__live__' for on-disk state). delete_checkpoint: remove by namespace/symbol/tag."
+            },
+            "repoPath": {
+              "type": "string",
+              "description": "Absolute path to the primary repo root when you want to pin checkpoints to one workspace root."
+            },
+            "namespace": {
+              "type": "string",
+              "description": "Checkpoint group (default 'default'). delete_checkpoint with namespace only purges the whole group."
+            },
+            "max_chars": {
+              "type": "integer",
+              "description": "Max output chars. Default 8000."
+            },
+            "path": {
+              "type": "string",
+              "description": "Source file. Use a repo-relative path in single-root repos or [FolderName]/path/to/file in multi-root workspaces. Required for save; optional for compare."
+            },
+            "symbol_name": {
+              "type": "string",
+              "description": "Target symbol name."
+            },
+            "semantic_tag": {
+              "type": "string",
+              "description": "Tag name (e.g. 'pre-refactor')."
+            },
+            "tag": {
+              "type": "string",
+              "description": "Alias for semantic_tag."
+            },
+            "tag_a": {
+              "type": "string",
+              "description": "(compare) First tag."
+            },
+            "tag_b": {
+              "type": "string",
+              "description": "(compare) Second tag. '__live__' = current file on disk."
+            }
+          },
+          "required": [
+            "action"
+          ]
+        }
+      },
+      {
+        "name": "cortex_manage_ast_languages",
+        "displayName": "Cortex Manage AST Languages",
+        "userDescription": "Inspect available Tree-sitter languages for AST tools.",
+        "modelDescription": "Inspect Tree-sitter Wasm grammar availability. Core languages are built in. This build does not download grammars from external sources; non-core languages require pre-bundled local .wasm files. action=status reports active/core languages. action=add is intentionally unsupported in this build.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "cortex-manage-ast-languages",
+        "icon": "$(globe)",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "enum": [
+                "status",
+                "add"
+              ],
+              "description": "status: list currently active, core, and known non-core languages. add: unsupported in this build (external downloads are disabled)."
+            },
+            "languages": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Language names for action=add. In this build, add always returns an unsupported error."
+            },
+            "repoPath": {
+              "type": "string",
+              "description": "Optional absolute repo root whose cached semantic index should be invalidated after new parsers are added."
+            },
+            "target_project": {
+              "type": "string",
+              "description": "Optional tracked project path override used instead of repoPath when invalidating cached semantic records for a project already tracked in Cortex DB."
+            }
+          },
+          "required": [
+            "action"
+          ]
+        }
+      },
+      {
+        "name": "cortex_act_edit_ast",
+        "displayName": "Cortex Act Edit AST",
+        "userDescription": "Edit Rust, TypeScript, or Python by symbol name.",
+        "modelDescription": "Edit Rust, TypeScript, or Python by symbol name instead of line number. Use this when you know the symbol you want to replace or delete and want structure-aware edits instead of text patches. Read the current symbol first with cortex_symbol_analyzer(read_source) when precision matters.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "cortex-act-edit-ast",
+        "icon": "$(wrench)",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "file": {
+              "type": "string",
+              "description": "Repo-relative, workspace-prefixed (multi-root), or absolute path to the source file."
+            },
+            "edits": {
+              "type": "array",
+              "description": "Edits to apply (bottom-up order enforced automatically).",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "target": {
+                    "type": "string",
+                    "description": "Symbol name or 'kind:name' (e.g. 'login' or 'function:login')."
+                  },
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "replace",
+                      "delete"
+                    ],
+                    "description": "replace: swap entire symbol body. delete: remove symbol."
+                  },
+                  "code": {
+                    "type": "string",
+                    "description": "Full replacement source (required for replace)."
+                  }
+                },
+                "required": [
+                  "target",
+                  "action"
+                ]
+              }
+            }
+          },
+          "required": [
+            "file",
+            "edits"
+          ]
+        }
+      },
+      {
+        "name": "cortex_act_edit_data_graph",
+        "displayName": "Cortex Act Edit Data Graph",
+        "userDescription": "Apply structural JSON and YAML edits by key path.",
+        "modelDescription": "Structural JSON and YAML edits via JSONPath-like targets. Use this for key-level config changes when line-based patches would be brittle.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "cortex-act-edit-data-graph",
+        "icon": "$(json)",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "file": {
+              "type": "string",
+              "description": "Repo-relative, workspace-prefixed (multi-root), or absolute path to the JSON or YAML file."
+            },
+            "edits": {
+              "type": "array",
+              "description": "Ordered list of edits to apply.",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "target": {
+                    "type": "string",
+                    "description": "JSONPath-like dot-notation target (e.g. '$.key', '$.section.sub', '$.array[0]'). Use '$' alone to address the root object."
+                  },
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "set",
+                      "replace",
+                      "delete"
+                    ],
+                    "description": "set/replace: write a value (set can upsert missing keys in JSON). delete: remove the key."
+                  },
+                  "value": {
+                    "type": "string",
+                    "description": "New value as a JSON-compatible string (required for set/replace). Booleans, numbers, and objects are accepted as strings and will be coerced."
+                  }
+                },
+                "required": [
+                  "target",
+                  "action"
+                ]
+              }
+            }
+          },
+          "required": [
+            "file",
+            "edits"
+          ]
+        }
+      },
+      {
+        "name": "cortex_act_edit_markup",
+        "displayName": "Cortex Act Edit Markup",
+        "userDescription": "Edit Markdown, HTML, or XML by structural target.",
+        "modelDescription": "Structural Markdown, HTML, and XML edits by section or node target. Use this when you know the heading, tag, table, or id you want to change and want to avoid brittle text replacement.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "cortex-act-edit-markup",
+        "icon": "$(code)",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "file": {
+              "type": "string",
+              "description": "Repo-relative, workspace-prefixed (multi-root), or absolute path to the markup file."
+            },
+            "edits": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "target": {
+                    "type": "string",
+                    "description": "Type:Value target (e.g. 'heading:Setup', 'table:0', 'tag:div', 'id:app')."
+                  },
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "replace",
+                      "delete",
+                      "insert_before",
+                      "insert_after"
+                    ],
+                    "description": "replace: swap entire node/section. delete: remove node/section. insert_before: inject before target without touching it. insert_after: inject after heading line, preserving section body."
+                  },
+                  "code": {
+                    "type": "string",
+                    "description": "Content to insert or replacement content (required for replace/insert_before/insert_after)."
+                  }
+                },
+                "required": [
+                  "target",
+                  "action"
+                ]
+              }
+            }
+          },
+          "required": [
+            "file",
+            "edits"
+          ]
+        }
+      },
+      {
+        "name": "cortex_act_sql_surgery",
+        "displayName": "Cortex Act SQL Surgery",
+        "userDescription": "Edit SQL DDL by statement type and object name.",
+        "modelDescription": "Edit SQL DDL statements such as CREATE TABLE or CREATE INDEX by statement type and object name. Use this for schema files where line-based editing is risky or the same token appears multiple times.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "cortex-act-sql-surgery",
+        "icon": "$(database)",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "file": {
+              "type": "string",
+              "description": "Repo-relative, workspace-prefixed (multi-root), or absolute path to the SQL file."
+            },
+            "edits": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "target": {
+                    "type": "string",
+                    "description": "Type:Name (e.g. 'create_table:users')."
+                  },
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "replace",
+                      "delete"
+                    ]
+                  },
+                  "code": {
+                    "type": "string",
+                    "description": "Full replacement statement (required for replace)."
+                  }
+                },
+                "required": [
+                  "target",
+                  "action"
+                ]
+              }
+            }
+          },
+          "required": [
+            "file",
+            "edits"
+          ]
+        }
+      },
+      {
+        "name": "cortex_act_shell_exec",
+        "displayName": "Cortex Act Shell Exec",
+        "userDescription": "Run a short synchronous shell command or diagnostics.",
+        "modelDescription": "Run a bounded shell command synchronously and return its output. Use this for quick diagnostics, one-shot builds, or short repo-local commands. Do not use it for watch mode, dev servers, or anything that should keep running.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "cortex-act-shell-exec",
+        "icon": "$(terminal)",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "command": {
+              "type": "string",
+              "description": "Shell command to run (required unless run_diagnostics=true). Executed via 'sh -c' on Unix and 'cmd /C' on Windows."
+            },
+            "cwd": {
+              "type": "string",
+              "description": "Repo-relative, workspace-prefixed (multi-root), or absolute working directory. Defaults to the primary workspace root."
+            },
+            "timeout_secs": {
+              "type": "integer",
+              "description": "Hard kill timeout in seconds. Default 30; automatically 60 when run_diagnostics=true.",
+              "default": 30
+            },
+            "run_diagnostics": {
+              "type": "boolean",
+              "description": "When true, auto-detect manifest in cwd and run the correct compiler check (cargo check, tsc --noEmit, go build, etc.). Ignores the command field.",
+              "default": false
+            },
+            "problem_matcher": {
+              "type": "string",
+              "description": "Named error extractor. Supported: 'cargo', 'tsc', 'eslint', 'go', 'python'. Returns structured JSON errors instead of raw output on failure."
+            }
+          }
+        }
+      },
+      {
+        "name": "cortex_act_batch_execute",
+        "displayName": "Cortex Act Batch Execute",
+        "userDescription": "Execute multiple Cortex tools in one sequential batch.",
+        "modelDescription": "Execute multiple Cortex tool calls in one round-trip and return a JSON BatchSummary object. Operations run sequentially, not in parallel. Use this for short workflows such as explore+edit+verify or several independent reads that do not need separate round-trips.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "cortex-act-batch-execute",
+        "icon": "$(run-all)",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "operations": {
+              "type": "array",
+              "description": "Ordered list of tool operations to execute sequentially.",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "tool_name": {
+                    "type": "string",
+                    "description": "Any active Cortex tool name. Nesting 'cortex_act_batch_execute' is not allowed. If you use 'cortex_mcp_hot_reload', place it last."
+                  },
+                  "parameters": {
+                    "type": "object",
+                    "description": "Parameters object for the tool, identical to calling the tool directly. Optional; defaults to {}."
+                  }
+                },
+                "required": [
+                  "tool_name"
+                ]
+              }
+            },
+            "fail_fast": {
+              "type": "boolean",
+              "description": "Stop after the first failing operation and skip the rest. Default false (all operations run regardless).",
+              "default": false
+            },
+            "max_chars_per_op": {
+              "type": "integer",
+              "description": "Maximum output characters per operation before truncation. Default 4000. Increase for operations that return large outputs like map_overview or deep_slice.",
+              "default": 4000
+            }
+          },
+          "required": [
+            "operations"
+          ]
+        }
+      },
+      {
+        "name": "cortex_search_exact",
+        "displayName": "Cortex Search Exact",
+        "userDescription": "Search files with an exact string or regex.",
+        "modelDescription": "Regex search over source files (ripgrep-style, ignore-aware). Returns file paths and 1-based line numbers.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "cortex-search-exact",
+        "icon": "$(search-fuzzy)",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "regex_pattern": {
+              "type": "string",
+              "description": "Regex pattern to search for (Rust `regex` crate syntax, e.g. 'fn handle_auth' or 'TODO|FIXME')."
+            },
+            "project_path": {
+              "type": "string",
+              "description": "Repo-relative, workspace-prefixed (multi-root), or absolute path to the workspace root to search. Omit to use the primary workspace root."
+            },
+            "file_extension": {
+              "type": "string",
+              "description": "Optional extension filter, e.g. 'rs', 'ts', '.py'. Omit to search all files."
+            },
+            "include_pattern": {
+              "type": "string",
+              "description": "Glob pattern to restrict which file paths are searched (e.g. 'crates/cortex-act/**' or '*/src/*.rs'). Matched against the full path string."
+            },
+            "max_results": {
+              "type": "integer",
+              "description": "Max matched lines to return (default 50, hard cap 500). Increase when searching large codebases.",
+              "default": 50
+            }
+          },
+          "required": [
+            "regex_pattern"
+          ]
+        }
+      },
+      {
+        "name": "cortex_mcp_hot_reload",
+        "displayName": "Cortex MCP Hot Reload",
+        "userDescription": "Restart the worker after rebuilding the binary.",
+        "modelDescription": "Restart the MCP worker to pick up a newly built binary. The supervisor respawns on the same stdio channel without disconnecting the IDE. Use this only after rebuilding, and if you batch it, make it the last operation because it restarts the worker.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "cortex-mcp-hot-reload",
+        "icon": "$(debug-restart)",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "reason": {
+              "type": "string",
+              "description": "Optional reason string for tracing logs."
+            }
+          }
+        }
+      },
+      {
+        "name": "cortex_fs_manage",
+        "displayName": "Cortex FS Manage",
+        "userDescription": "Write, patch, create, delete, rename, move, or copy files and directories.",
+        "modelDescription": "Write, patch, create, delete, rename, move, or copy files and directories. Use this for physical file operations, not structured source edits.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "cortex-fs-manage",
+        "icon": "$(files)",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "enum": [
+                "write",
+                "patch",
+                "mkdir",
+                "delete",
+                "rename",
+                "move",
+                "copy"
+              ],
+              "description": "Operation to perform."
+            },
+            "paths": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Repo-relative, workspace-prefixed (multi-root), or absolute paths. For write/patch use paths[0]. For rename/move/copy use paths[0]=source, paths[1]=destination. For delete/mkdir you may pass multiple paths."
+            },
+            "path": {
+              "type": "string",
+              "description": "Legacy single repo-relative, workspace-prefixed, or absolute path fallback for backward compatibility."
+            },
+            "new_path": {
+              "type": "string",
+              "description": "Legacy destination fallback using a repo-relative, workspace-prefixed, or absolute path."
+            },
+            "content": {
+              "type": "string",
+              "description": "File content to write (required for write)."
+            },
+            "patch_action": {
+              "type": "string",
+              "enum": [
+                "set",
+                "delete"
+              ],
+              "description": "Sub-action for action=patch. Defaults to set. Use this instead of overloading the top-level action field."
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "env",
+                "ini",
+                "kv"
+              ],
+              "description": "Key-value file format (required for patch)."
+            },
+            "target": {
+              "type": "string",
+              "description": "Key name to modify (required for patch)."
+            },
+            "value": {
+              "description": "New value (required for patch action=set)."
+            }
+          },
+          "required": [
+            "action"
+          ]
+        }
+      }
+    ]
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "stage:sidecars": "node ./scripts/stage-sidecars.mjs",
+    "stage:sidecars:all": "node ./scripts/stage-sidecars.mjs --all",
+    "vscode:prepublish": "npm run compile && npm run stage:sidecars:all",
+    "package:vsix": "npx @vscode/vsce package"
+  },
+  "devDependencies": {
+    "@types/node": "^20.17.46",
+    "@types/vscode": "^1.103.0",
+    "@vscode/vsce": "^3.6.2",
+    "typescript": "^5.8.3"
+  }
+}

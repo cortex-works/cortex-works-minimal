@@ -7,10 +7,9 @@
 //! The supervisor wrapper re-spawns the worker on exit code 42.
 //! `cortex_mcp_hot_reload` triggers this to pick up a newly built binary.
 
-mod tools;
-
 use std::io::{BufRead, Write};
 
+use cortex_mcp::{MCP_PROTOCOL_VERSION, tools};
 use tracing_subscriber::{EnvFilter, fmt};
 
 fn main() -> anyhow::Result<()> {
@@ -117,7 +116,7 @@ fn run_worker_stdio_server() -> anyhow::Result<()> {
                     "jsonrpc": "2.0",
                     "id": id,
                     "result": {
-                        "protocolVersion": "2024-11-05",
+                        "protocolVersion": MCP_PROTOCOL_VERSION,
                         "capabilities": {
                             "tools": { "listChanged": true },
                             "resources": { "subscribe": false, "listChanged": false }
